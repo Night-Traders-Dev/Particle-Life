@@ -454,6 +454,18 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     pc.dt                 = dt;
     pc.halo_count         = halo_count;
     pc.time_seconds       = time_seconds;
+    pc.camera_zoom        = cfg.current_camera_zoom;
+    pc.radius             = cfg.radius;
+    pc.dampening          = cfg.dampening;
+    pc.trail_decay        = cfg.trail_decay;
+    pc.bloom_threshold    = cfg.bloom_threshold;
+    pc.bloom_intensity    = cfg.bloom_intensity;
+    pc.vignette_strength  = cfg.vignette_strength;
+    pc.halo_intensity     = cfg.halo_intensity;
+    pc.effect_flags       = (cfg.trails_enabled   ? EFFECT_TRAILS   : 0u)
+                          | (cfg.bloom_enabled    ? EFFECT_BLOOM    : 0u)
+                          | (cfg.vignette_enabled ? EFFECT_VIGNETTE : 0u)
+                          | (cfg.halos_enabled    ? EFFECT_HALOS    : 0u);
     pc.repulsion_radius   = cfg.repulsion_radius;
     pc.interaction_radius = cfg.interaction_radius;
     pc.density_limit      = cfg.density_limit;

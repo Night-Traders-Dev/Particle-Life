@@ -26,9 +26,13 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
   - **Randomize:** Instantly randomize all force values
 - Per-type colour pickers
 
-### Simulation Control
-- **Time Scaling:** Dynamic simulation speed adjustment (0.0x–10.0x)
-- **Persistence:** Save/Load configuration presets and simulation snapshots
+### Interaction & Inspection
+- **Interactive Hover:** Hover over any particle to see its type, conversion history, and age in a popup.
+- **Organism Inspection:** Expanded hover window for particles that belong to an organism, showing its composition and metrics.
+- **Simulation Control:** 
+  - **Time Scaling:** Dynamic speed adjustment (0.0x–10.0x)
+  - **Persistence:** Save/Load configuration presets and snapshots
+  - **Force Grid Tools:** Symmetry toggle and instant randomization
 
 ### Particle Archetypes
 Six behaviours selectable per type:
