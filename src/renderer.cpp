@@ -143,12 +143,19 @@ void Renderer::create_quad_pipeline(VulkanContext& ctx,
     dsl_ci.bindingCount = 1;
     dsl_ci.pBindings    = &binding;
     VK_CHECK(vkCreateDescriptorSetLayout(ctx.device, &dsl_ci, nullptr, &quad_dset_layout_));
+// Pipeline layout
+VkPushConstantRange pc_range{};
+pc_range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+pc_range.offset     = 0;
+pc_range.size       = sizeof(float);
 
-    VkPipelineLayoutCreateInfo pl_ci{};
-    pl_ci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pl_ci.setLayoutCount = 1;
-    pl_ci.pSetLayouts    = &quad_dset_layout_;
-    VK_CHECK(vkCreatePipelineLayout(ctx.device, &pl_ci, nullptr, &quad_pipe_layout_));
+VkPipelineLayoutCreateInfo pl_ci{};
+pl_ci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+pl_ci.setLayoutCount = 1;
+pl_ci.pSetLayouts    = &quad_dset_layout_;
+pl_ci.pushConstantRangeCount = 1;
+pl_ci.pPushConstantRanges    = &pc_range;
+VK_CHECK(vkCreatePipelineLayout(ctx.device, &pl_ci, nullptr, &quad_pipe_layout_));
 
     // Shaders
     VkShaderModule vert = ctx.create_shader_module(vert_spv);
@@ -366,7 +373,8 @@ bool Renderer::draw_frame(VulkanContext& ctx,
                           bool sim_active,
                           SimConfig& cfg,
                           Particles& particles,
-                          OrganismManager& org_manager)
+                          OrganismManager& org_manager,
+                          float day_night_factor)
 {
     (void)sim_active;
     FrameData& frame = frames_[current_frame_];
@@ -387,7 +395,7 @@ bool Renderer::draw_frame(VulkanContext& ctx,
     // Record
     VkCommandBuffer cmd = frame.cmd;
     vkResetCommandBuffer(cmd, 0);
-    record_command_buffer(cmd, image_index, ctx, compute, sim_active, cfg, particles, org_manager);
+    record_command_buffer(cmd, image_index, ctx, compute, sim_active, cfg, particles, org_manager, day_night_factor);
 
     // Submit
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -437,10 +445,14 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd,
                                      bool            sim_active,
                                      SimConfig& cfg,
                                      Particles& particles,
-                                     OrganismManager& org_manager)
+                                     OrganismManager& org_manager,
+                                     float day_night_factor)
 {
     (void)compute;
     (void)sim_active;
+    (void)cfg;
+    (void)particles;
+    (void)org_manager;
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     VK_CHECK(vkBeginCommandBuffer(cmd, &begin));
@@ -480,40 +492,14 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd,
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, quad_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             quad_pipe_layout_, 0, 1, &quad_desc_set_, 0, nullptr);
+    
+    // Push day_night_factor
+    vkCmdPushConstants(cmd, quad_pipe_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(float), &day_night_factor);
+
     vkCmdDraw(cmd, 3, 1, 0, 0); // 3 vertices → fullscreen triangle
 
-    // Status Bar
-    ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, 30), ImGuiCond_Always);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.5f)); // Semi-transparent black
-    ImGui::Begin("Status Bar", nullptr, 
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
-    
-    // Total particles
-    ImGui::Text("Particles: %u | ", cfg.particle_count);
-    ImGui::SameLine();
-    
-    // Per-type counts
-    ImGui::Text("Types: ");
-    for(uint32_t t = 0; t < cfg.particle_types; ++t) {
-        uint32_t count = 0;
-        for(uint32_t i = 0; i < particles.types.size(); ++i) {
-            if(particles.types[i] == t) count++;
-        }
-        ImGui::SameLine();
-        ImGui::Text("[%u: %u] ", t, count);
-    }
-    ImGui::SameLine();
-    
-    // Organism count
-    ImGui::Text("| Organisms: %zu", org_manager.organisms.size());
-    
-    ImGui::End();
-    ImGui::PopStyleColor();
-
-    // Single ImGui::Render() per frame: finalises both the settings panel
-    // (queued in Interface::render_imgui) and the status bar above.
+    // Single ImGui::Render() per frame: finalises everything
+    // queued in Interface::render_imgui
     ImGui::Render();
 
     // ImGui

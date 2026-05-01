@@ -36,21 +36,30 @@ layout(set = 0, binding = 17, std430) readonly buffer Conversions { ConversionDa
 
 // Push constants
 layout(push_constant, std430) uniform Params {
-    vec2  region_size;
-    vec2  camera_origin;
-    uint  particle_count;
-    uint  particle_types;
-    uint  step;
-    float dt;
-    float camera_zoom;
-    float radius;
-    float dampening;
-    float repulsion_radius;
-    float interaction_radius;
-    float density_limit;
-    float metabolism;
-    float infection_rate;
-    float spawn_probability;
+    vec2  region_size;        //   0
+    vec2  camera_origin;      //   8
+    uint  particle_count;     //  16
+    uint  particle_types;     //  20
+    uint  step;               //  24
+    float dt;                 //  28
+    float camera_zoom;        //  32
+    float radius;             //  36
+    float dampening;          //  40
+    float repulsion_radius;   //  44
+    float interaction_radius; //  48
+    float density_limit;      //  52
+    float metabolism;         //  56
+    float infection_rate;     //  60
+    float spawn_probability;  //  64
+    uint  halo_count;         //  68
+    float trail_decay;        //  72
+    float bloom_threshold;    //  76
+    float bloom_intensity;    //  80
+    float vignette_strength;  //  84
+    float halo_intensity;     //  88
+    float time_seconds;       //  92
+    uint  effect_flags;       //  96
+    float day_night_factor;   // 100
 } params;
 
 // Behavior flag constants (must match ParticleBehavior enum in types.h)

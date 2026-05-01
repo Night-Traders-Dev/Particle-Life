@@ -43,6 +43,8 @@ private:
     glm::vec2 smooth_mouse_change_ = {};
     bool      lmb_down_            = false;
     float     time_scale_          = 1.0f; // NEW: Added time scaling
+    double    day_night_time_      = 0.0;  // NEW: Day-night cycle time
+    const double DAY_NIGHT_CYCLE_LENGTH = 1200.0; // 20 minutes in seconds
 
     // Organism tracking
     int                    organism_tick_counter_ = 0;

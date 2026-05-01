@@ -42,12 +42,31 @@ void Simulation::reset() {
     organism_tick_counter_ = 0;
 }
 
-// ── Per-frame tick ────────────────────────────────────────────────────────────
+    // ── Per-frame tick ────────────────────────────────────────────────────────────
 
 void Simulation::tick(GLFWwindow* window, double dt) {
     // ── Input ──────────────────────────────────────────────────────────────────
     handle_input(window, dt);
 
+    // Update day-night cycle
+    if (is_active) {
+        day_night_time_ += dt * time_scale_;
+        if (day_night_time_ >= DAY_NIGHT_CYCLE_LENGTH)
+            day_night_time_ -= DAY_NIGHT_CYCLE_LENGTH;
+    }
+
+    float day_night_factor = 1.0f;
+    if (day_night_time_ < 600.0) {
+        day_night_factor = 1.0f;
+    } else if (day_night_time_ < 690.0) {
+        float t = (float)(day_night_time_ - 600.0) / 90.0f;
+        day_night_factor = 1.0f - t * 0.6f; // 1.0 -> 0.4
+    } else if (day_night_time_ < 1110.0) {
+        day_night_factor = 0.4f;
+    } else {
+        float t = (float)(day_night_time_ - 1110.0) / 90.0f;
+        day_night_factor = 0.4f + t * 0.6f; // 0.4 -> 1.0
+    }
 
     // ── Upload dynamic GPU data ────────────────────────────────────────────────
     if (is_active)
@@ -56,7 +75,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     // ── ImGui ──────────────────────────────────────────────────────────────────
     bool request_reset = false;
     uint32_t prev_count = cfg.particle_count;
-    iface.render_imgui(cfg, particles, organism_manager, request_reset);
+    iface.render_imgui(cfg, particles, organism_manager, request_reset, day_night_time_, DAY_NIGHT_CYCLE_LENGTH);
     time_scale_ = iface.time_scale_slider;
 
     if (cfg.particle_count != prev_count) {
@@ -75,8 +94,8 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         // Use a temporary one-time command buffer for the compute pass
         VkCommandBuffer compute_cmd = vk.begin_single_command();
 
-        float scaled_dt = static_cast<float>(dt) * 5.0f * time_scale_;
-compute.record(compute_cmd, cfg, scaled_dt, 0, 0.0f);
+        float scaled_dt = static_cast<float>(dt) * 5.0f * time_scale_ * day_night_factor;
+        compute.record(compute_cmd, cfg, scaled_dt, 0, (float)glfwGetTime(), day_night_factor);
         vk.end_single_command(compute_cmd);
 
         // Organism detection (every N frames)
@@ -99,7 +118,7 @@ compute.record(compute_cmd, cfg, scaled_dt, 0, 0.0f);
     if (renderer.swapchain_dirty)
         renderer.on_resize(vk, window);
 
-    renderer.draw_frame(vk, compute, is_active, cfg, particles, organism_manager);
+    renderer.draw_frame(vk, compute, is_active, cfg, particles, organism_manager, day_night_factor);
 }
 
 // ── Input handling ────────────────────────────────────────────────────────────

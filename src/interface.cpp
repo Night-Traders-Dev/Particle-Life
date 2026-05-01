@@ -28,13 +28,74 @@ ImVec4 Interface::force_to_color(float f) {
 void Interface::render_imgui(SimConfig&       cfg,
                               Particles&       particles,
                               OrganismManager& org_manager,
-                              bool&            request_reset)
+                              bool&            request_reset,
+                              double           day_night_time,
+                              double           cycle_length)
 {
     request_reset = false;
 
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+
+    // ── Status Bar ────────────────────────────────────────────────────────────
+    {
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        float height = ImGui::GetFrameHeight() + 8.0f;
+        ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - height));
+        ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, height));
+        
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.6f)); // Semi-transparent
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 4));
+        
+        ImGui::Begin("Status Bar", nullptr, 
+                     ImGuiWindowFlags_NoDecoration | 
+                     ImGuiWindowFlags_NoInputs     | 
+                     ImGuiWindowFlags_NoMove       | 
+                     ImGuiWindowFlags_NoScrollWithMouse |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+        
+        double progress = day_night_time / cycle_length;
+        
+        // Clock (starts at 06:00)
+        double total_hours = progress * 24.0 + 6.0;
+        int hours = (int)std::floor(total_hours) % 24;
+        int minutes = (int)std::floor((total_hours - std::floor(total_hours)) * 60.0);
+        
+        // Temperature
+        // Peak at 15:00 (progress 0.375), min at 03:00 (progress 0.875)
+        float temp_factor = std::sin(static_cast<float>(2.0 * 3.1415926535 * (progress - 0.125)));
+        float temp_c = 22.5f + 12.5f * temp_factor;
+        float temp_f = temp_c * 1.8f + 32.0f;
+        
+        const char* day_phase = "DAY";
+        ImVec4 phase_col = ImVec4(1.0f, 0.9f, 0.3f, 1.0f); // Yellow for Day
+
+        if (day_night_time >= 600.0 && day_night_time < 690.0) {
+            day_phase = "SUNSET";
+            phase_col = ImVec4(1.0f, 0.5f, 0.2f, 1.0f);
+        } else if (day_night_time >= 690.0 && day_night_time < 1110.0) {
+            day_phase = "NIGHT";
+            phase_col = ImVec4(0.4f, 0.6f, 1.0f, 1.0f);
+        } else if (day_night_time >= 1110.0) {
+            day_phase = "SUNRISE";
+            phase_col = ImVec4(1.0f, 0.7f, 0.4f, 1.0f);
+        }
+
+        ImGui::Text("Time: %02d:%02d | ", hours, minutes);
+        ImGui::SameLine();
+        ImGui::TextColored(phase_col, "%s", day_phase);
+        ImGui::SameLine();
+        ImGui::Text(" | Temp: %.1f°C / %.1f°F", temp_c, temp_f);
+        
+        // Add some basic stats to the status bar too
+        ImGui::SameLine(ImGui::GetWindowWidth() - 240);
+        ImGui::Text("Particles: %u | Organisms: %zu", cfg.particle_count, org_manager.organisms.size());
+
+        ImGui::End();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+    }
 
     if (!settings_visible) return;
 

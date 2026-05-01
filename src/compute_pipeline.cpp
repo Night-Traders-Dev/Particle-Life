@@ -436,7 +436,8 @@ void ComputePipeline::record(VkCommandBuffer cmd,
                              const SimConfig& cfg,
                              float dt,
                              uint32_t halo_count,
-                             float time_seconds)
+                             float time_seconds,
+                             float day_night_factor)
 {
     if (pos_buffer_a_.handle == VK_NULL_HANDLE) return;
 
@@ -472,6 +473,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     pc.metabolism         = cfg.metabolism;
     pc.infection_rate     = cfg.infection_rate;
     pc.spawn_probability  = cfg.spawn_probability;
+    pc.day_night_factor   = day_night_factor;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,

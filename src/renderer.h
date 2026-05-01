@@ -44,7 +44,8 @@ public:
                     bool sim_active,
                     SimConfig& cfg,
                     Particles& particles,
-                    OrganismManager& org_manager);
+                    OrganismManager& org_manager,
+                    float day_night_factor);
 
     // Called when framebuffer is resized
     void on_resize(VulkanContext& ctx, GLFWwindow* window);
@@ -84,6 +85,7 @@ private:
                                      bool            sim_active,
                                      SimConfig& cfg,
                                      Particles& particles,
-                                     OrganismManager& org_manager);
+                                     OrganismManager& org_manager,
+                                     float day_night_factor);
 
 };

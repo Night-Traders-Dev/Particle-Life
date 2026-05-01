@@ -38,7 +38,8 @@ public:
                 const SimConfig& cfg,
                 float dt,
                 uint32_t halo_count,
-                float    time_seconds);
+                float    time_seconds,
+                float    day_night_factor);
 
     // Upload force + color arrays (called each frame before record())
     void upload_dynamic_data(VulkanContext& ctx,

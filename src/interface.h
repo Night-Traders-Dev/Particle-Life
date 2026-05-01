@@ -52,7 +52,9 @@ public:
     void render_imgui(SimConfig&       cfg,
                       Particles&       particles,
                       OrganismManager& org_manager,
-                      bool&            request_reset);
+                      bool&            request_reset,
+                      double           day_night_time,
+                      double           cycle_length);
 
 private:
     void draw_particle_grid(SimConfig& cfg, Particles& particles);

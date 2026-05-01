@@ -79,7 +79,7 @@ struct PushConstants {
     float     halo_intensity;     //  88 –  91
     float     time_seconds;       //  92 –  95
     uint32_t  effect_flags;       //  96 –  99  bit0=trails, bit1=bloom, bit2=vignette, bit3=halos
-    uint32_t  padding_pc;         // 100 – 103
+    float     day_night_factor;   // 100 – 103
 };
 static_assert(sizeof(PushConstants) == 104, "PushConstants layout mismatch");
 
