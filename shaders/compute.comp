@@ -1,0 +1,407 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// Input buffers
+layout(set = 0, binding = 0, std430) buffer InPosBuffer  { vec2  data[]; } in_pos_buffer;
+layout(set = 0, binding = 1, std430) buffer InVelBuffer  { vec2  data[]; } in_vel_buffer;
+layout(set = 0, binding = 2, std430) buffer Types        { uint  data[]; } type_buffer;
+layout(set = 0, binding = 3, std430) buffer Forces       { float data[]; } force_buffer;
+layout(set = 0, binding = 4, std430) buffer Colors       { vec4  data[]; } color_buffer;
+
+// Output buffers
+layout(set = 0, binding = 5, std430) buffer OutPosBuffer { vec2  data[]; } out_pos_buffer;
+layout(set = 0, binding = 6, std430) buffer OutVelBuffer { vec2  data[]; } out_vel_buffer;
+layout(set = 0, binding = 7, rgba32f) uniform image2D out_render_texture;
+
+// Behavior / orientation / energy buffers
+layout(set = 0, binding =  8, std430) readonly buffer Behaviors { uint  data[]; } behavior_buffer;
+layout(set = 0, binding =  9, std430) buffer AngleIn            { float data[]; } angle_in_buffer;
+layout(set = 0, binding = 10, std430) buffer AngVelIn           { float data[]; } avel_in_buffer;
+layout(set = 0, binding = 11, std430) buffer AngleOut           { float data[]; } angle_out_buffer;
+layout(set = 0, binding = 12, std430) buffer AngVelOut          { float data[]; } avel_out_buffer;
+layout(set = 0, binding = 13, std430) buffer EnergyIn           { float data[]; } energy_in_buffer;
+layout(set = 0, binding = 14, std430) buffer EnergyOut          { float data[]; } energy_out_buffer;
+
+// Spatial Grid
+layout(set = 0, binding = 15, std430) buffer GridOffsets        { uint  data[]; } grid_offsets;
+layout(set = 0, binding = 16, std430) buffer SortedIndices      { uint  data[]; } sorted_indices;
+
+struct ConversionData {
+    int  target_type;
+    float probability;
+    uint padding[2];
+};
+layout(set = 0, binding = 17, std430) readonly buffer Conversions { ConversionData data[]; } conversion_buffer;
+
+// Push constants
+layout(push_constant, std430) uniform Params {
+    vec2  region_size;
+    vec2  camera_origin;
+    uint  particle_count;
+    uint  particle_types;
+    uint  step;
+    float dt;
+    float camera_zoom;
+    float radius;
+    float dampening;
+    float repulsion_radius;
+    float interaction_radius;
+    float density_limit;
+    float metabolism;
+    float infection_rate;
+    float spawn_probability;
+} params;
+
+// Behavior flag constants (must match ParticleBehavior enum in types.h)
+const uint BEHAVIOR_REPEL    = 1u;
+const uint BEHAVIOR_POLAR    = 2u;
+const uint BEHAVIOR_HEAVY    = 4u;
+const uint BEHAVIOR_CATALYST = 8u;
+const uint BEHAVIOR_VIRAL    = 16u;
+const uint BEHAVIOR_LEECH    = 32u;
+const uint BEHAVIOR_SHIELD   = 64u;
+const uint BEHAVIOR_POSITIVE = 128u;
+const uint BEHAVIOR_NEGATIVE = 256u;
+
+const uint GRID_CELL_SIZE = 60u;
+const uint GRID_W         = (2560u / GRID_CELL_SIZE) + 2u;
+const uint GRID_H         = (1440u / GRID_CELL_SIZE) + 2u;
+
+// https://stackoverflow.com/questions/4200224/random-noise-functions-for-glsl
+float random(float v) {
+    return fract(sin(dot(vec2(v, v / 10.123f), vec2(12.9898f, 78.233f))) * 43758.5453f);
+}
+
+vec2 random2(float v) {
+    return vec2(random(v), random(v + 1.234f));
+}
+
+uint get_cell_index(vec2 pos) {
+    uint cx = uint(clamp(pos.x / float(GRID_CELL_SIZE), 0.0, float(GRID_W - 1u)));
+    uint cy = uint(clamp(pos.y / float(GRID_CELL_SIZE), 0.0, float(GRID_H - 1u)));
+    return cx + cy * GRID_W;
+}
+
+void grid_clear(uint i) {
+    if (i < GRID_W * GRID_H) {
+        grid_offsets.data[i] = 0;
+    }
+}
+
+void grid_count(uint i) {
+    if (i < params.particle_count) {
+        uint cell = get_cell_index(in_pos_buffer.data[i]);
+        atomicAdd(grid_offsets.data[cell], 1u);
+    }
+}
+
+// Prefix sum - run with single workgroup
+void grid_prefix_sum() {
+    uint n = GRID_W * GRID_H;
+    uint sum = 0;
+    for (uint j = 0; j < n; j++) {
+        sum += grid_offsets.data[j];
+        grid_offsets.data[j] = sum;
+    }
+}
+
+void grid_sort(uint i) {
+    if (i < params.particle_count) {
+        uint cell = get_cell_index(in_pos_buffer.data[i]);
+        // grid_offsets currently stores inclusive prefix sum (end of each cell)
+        // We use atomicAdd to get a unique slot for each particle (decrementing from the end)
+        uint slot = atomicAdd(grid_offsets.data[cell], -1u);
+        sorted_indices.data[slot - 1u] = i;
+    }
+}
+
+
+void apply_physics(uint i) {
+    const float MAX_RADIUS = params.interaction_radius * params.interaction_radius;
+
+    vec2  pos_a         = in_pos_buffer.data[i];
+    vec2  vel_a         = in_vel_buffer.data[i];
+    uint  type_a        = type_buffer.data[i];
+    uint  flags_a       = behavior_buffer.data[type_a];
+    float energy_a      = energy_in_buffer.data[i];
+    vec2  total_force   = vec2(0.0f);
+    float local_density = 0.0f;
+
+    bool is_repel    = (flags_a & BEHAVIOR_REPEL)    != 0u;
+    bool is_polar    = (flags_a & BEHAVIOR_POLAR)    != 0u;
+    bool is_heavy    = (flags_a & BEHAVIOR_HEAVY)    != 0u;
+    bool is_viral    = (flags_a & BEHAVIOR_VIRAL)    != 0u;
+    bool is_leech    = (flags_a & BEHAVIOR_LEECH)    != 0u;
+    bool is_shield   = (flags_a & BEHAVIOR_SHIELD)   != 0u;
+
+    float angle_a        = is_polar ? angle_in_buffer.data[i] : 0.0f;
+    vec2  dipole_a       = is_polar ? vec2(cos(angle_a), sin(angle_a)) : vec2(0.0f);
+    float torque_total   = 0.0f;
+    float catalyst_boost = 0.0f;
+    float energy_gain    = 0.0f;
+
+    uint center_cell = get_cell_index(pos_a);
+    int cx = int(center_cell % GRID_W);
+    int cy = int(center_cell / GRID_W);
+
+    // --- density & interaction pass using GRID ---
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            int ncx = cx + dx;
+            int ncy = cy + dy;
+            if (ncx < 0 || ncx >= int(GRID_W) || ncy < 0 || ncy >= int(GRID_H)) continue;
+            
+            uint cell_idx = uint(ncx + ncy * int(GRID_W));
+            uint start = grid_offsets.data[cell_idx];
+            uint end   = (cell_idx == GRID_W * GRID_H - 1u) ? params.particle_count : grid_offsets.data[cell_idx + 1u];
+
+            for (uint k = start; k < end; k++) {
+                uint j = sorted_indices.data[k];
+                if (i == j) continue;
+
+                vec2  pos_b   = in_pos_buffer.data[j];
+                vec2  delta   = pos_a - pos_b;
+                float dist_sq = dot(delta, delta);
+                if (dist_sq > MAX_RADIUS) continue;
+
+                float dist = sqrt(dist_sq);
+                if (dist > 0.0f) {
+                    uint  type_b     = type_buffer.data[j];
+                    uint  flags_b    = behavior_buffer.data[type_b];
+                    float proximity  = 1.0f - dist / params.interaction_radius;
+                    
+                    // Density
+                    if (type_a == type_b)
+                        local_density += proximity;
+                    else
+                        local_density += proximity * 0.5f;
+
+                    float attraction = force_buffer.data[type_a + type_b * params.particle_types];
+                    
+                    // Charge logic (additive to force matrix)
+                    if (((flags_a | flags_b) & (BEHAVIOR_POSITIVE | BEHAVIOR_NEGATIVE)) != 0u) {
+                        bool pos_a = (flags_a & BEHAVIOR_POSITIVE) != 0u;
+                        bool neg_a = (flags_a & BEHAVIOR_NEGATIVE) != 0u;
+                        bool pos_b = (flags_b & BEHAVIOR_POSITIVE) != 0u;
+                        bool neg_b = (flags_b & BEHAVIOR_NEGATIVE) != 0u;
+
+                        float charge_force = 0.0f;
+                        if (pos_a && pos_b) charge_force -= 0.6f;
+                        if (neg_a && neg_b) charge_force -= 0.6f;
+                        if ((pos_a && neg_b) || (neg_a && pos_b)) charge_force += 0.6f;
+                        attraction += charge_force;
+                    }
+
+                    vec2  normal     = normalize(delta);
+                    float force;
+
+                    // Viral infection logic
+                    if (is_viral && !((flags_b & BEHAVIOR_VIRAL) != 0u) && !((flags_b & BEHAVIOR_SHIELD) != 0u)) {
+                        if (dist < params.repulsion_radius * 1.5f && random(float(i + j) * params.dt) < params.infection_rate * params.dt) {
+                            type_buffer.data[j] = type_a;
+                        }
+                    }
+
+                    // Interaction-based type conversion
+                    ConversionData conv = conversion_buffer.data[type_a + type_b * params.particle_types];
+                    if (conv.target_type >= 0) {
+                        if (dist < params.repulsion_radius * 1.2f && random(float(i + j + 7) * params.dt) < conv.probability * params.dt) {
+                            type_buffer.data[i] = uint(conv.target_type);
+                        }
+                    }
+
+                    // Energy drain (Leech)
+                    if (is_leech && !((flags_b & BEHAVIOR_SHIELD) != 0u)) {
+                        float drain = proximity * 0.1f * params.dt;
+                        energy_gain += drain;
+                    }
+
+                    // REPEL: override force matrix — always push away
+                    if (is_repel) {
+                        attraction = -1.0f;
+                    }
+
+                    // POLAR: modulate attraction by dipole alignment; accumulate torque
+                    if (is_polar) {
+                        float align_a = dot(dipole_a, -normal);
+                        attraction *= clamp(1.0f + 1.5f * align_a, -0.5f, 2.5f);
+
+                        if ((flags_b & BEHAVIOR_POLAR) != 0u) {
+                            vec2  dipole_b = vec2(cos(angle_in_buffer.data[j]),
+                                                 sin(angle_in_buffer.data[j]));
+                            float align_b  = dot(dipole_b, normal);
+                            attraction    *= clamp(1.0f + 1.5f * align_b, -0.5f, 2.5f);
+
+                            float cross_ab = dipole_a.x * dipole_b.y - dipole_a.y * dipole_b.x;
+                            torque_total  += cross_ab * proximity * 0.02f;
+                        }
+
+                        float to_j_cross = dipole_a.x * (-normal.y) - dipole_a.y * (-normal.x);
+                        torque_total += to_j_cross * abs(attraction) * proximity * 0.04f;
+                    }
+
+                    // CATALYST neighbour
+                    if ((flags_b & BEHAVIOR_CATALYST) != 0u) {
+                        catalyst_boost += proximity;
+                    }
+
+                    // Feeding
+                    if (attraction > 0.5f) {
+                        energy_gain += attraction * proximity * 0.05f * params.dt;
+                    }
+
+                    if (attraction > 0.0f) {
+                        float density_factor = 1.0f - min(max(0.0f, local_density - params.density_limit), 1.005f);
+                        attraction *= density_factor;
+                    }
+
+                    if (dist < params.repulsion_radius) {
+                        force = (dist / params.repulsion_radius - 1.0f) * 2.0f;
+                    } else {
+                        float width    = params.interaction_radius - params.repulsion_radius;
+                        float midpoint = (params.repulsion_radius + params.interaction_radius) * 0.5f;
+                        force = attraction * (1.0f - abs(dist - midpoint) / (width * 0.5f));
+                    }
+
+                    total_force += normal * force * -50.0f;
+                }
+            }
+        }
+    }
+
+    // HEAVY: high effective mass
+    if (is_heavy) total_force *= 0.25f;
+
+    const float MAX_FORCE = 100.0f;
+    float f_sq = dot(total_force, total_force);
+    if (f_sq > MAX_FORCE * MAX_FORCE)
+        total_force = normalize(total_force) * MAX_FORCE;
+
+    vel_a += total_force * params.dt;
+
+    // CATALYST
+    float damp = min(params.dampening + catalyst_boost * 0.04f, 0.99f);
+    vel_a *= damp;
+
+    // Metabolism
+    energy_a -= params.metabolism * params.dt;
+    energy_a += energy_gain;
+    energy_a = clamp(energy_a, 0.0f, 2.0f);
+
+    // Rebirth / Spawning
+    bool rebirth = (energy_a <= 0.0f);
+    if (!rebirth && energy_a < 0.2f) {
+        // Slow spontaneous spawning of basic type 0
+        if (random(float(i + 13) * params.dt) < params.spawn_probability * params.dt) {
+            rebirth = true;
+            type_buffer.data[i] = 0; // Spawn as basic type
+        }
+    }
+
+    if (rebirth) {
+        vec2 r = random2(float(i) + pos_a.x * 1.123f + params.dt);
+        pos_a = r * params.region_size;
+        vel_a = vec2(0.0f);
+        energy_a = 1.0f;
+    } else {
+        pos_a += vel_a * params.dt;
+    }
+
+    out_pos_buffer.data[i] = pos_a;
+    out_vel_buffer.data[i] = vel_a;
+    energy_out_buffer.data[i] = energy_a;
+
+    // POLAR
+    if (is_polar) {
+        float avel = avel_in_buffer.data[i];
+        avel += torque_total * params.dt;
+        avel *= params.dampening;
+        angle_out_buffer.data[i] = mod(angle_in_buffer.data[i] + avel * params.dt, 6.28318f);
+        avel_out_buffer.data[i]  = avel;
+    } else {
+        angle_out_buffer.data[i] = angle_in_buffer.data[i];
+        avel_out_buffer.data[i]  = avel_in_buffer.data[i];
+    }
+}
+
+
+void render_particle(uint i) {
+    vec2  pos    = in_pos_buffer.data[i];
+    uint  type   = type_buffer.data[i];
+    uint  flags  = behavior_buffer.data[type];
+    float energy = energy_in_buffer.data[i];
+    bool  polar  = (flags & BEHAVIOR_POLAR) != 0u;
+
+    vec2  screen_center = params.region_size * 0.5f;
+    float radius = params.radius * params.camera_zoom * clamp(energy, 0.5f, 1.5f);
+    int   range  = int(ceil(radius));
+    float r      = float(range);
+
+    vec2 center = screen_center + (pos - params.camera_origin) * params.camera_zoom;
+
+    if (center.x + r < 0.0f || center.x - r > params.region_size.x) return;
+    if (center.y + r < 0.0f || center.y - r > params.region_size.y) return;
+
+    float angle   = polar ? angle_in_buffer.data[i] : 0.0f;
+    vec2  dip_dir = polar ? vec2(cos(angle), sin(angle)) : vec2(0.0f);
+    vec2  north_pt = center + dip_dir * (radius * 0.55f);
+
+    vec2  screen_pos = center - vec2(r, r);
+
+    for (int x = -range; x <= range; x++) {
+        for (int y = -range; y <= range; y++) {
+            ivec2 pixel_pos = ivec2(floor(screen_pos)) + ivec2(x, y);
+            vec2  px_center = vec2(pixel_pos) + 0.5f;
+
+            float d_main = distance(px_center, center);
+            if (d_main >= radius) continue;
+
+            // Anti-aliased disk rendering
+            float alpha = 1.0 - smoothstep(radius * 0.8, radius, d_main);
+            vec4 col = color_buffer.data[type];
+            col.a *= clamp(energy * 2.0f, 0.2f, 1.0f) * alpha;
+
+            // Charge indicators
+            if ((flags & BEHAVIOR_POSITIVE) != 0u) {
+                float d_pos = distance(px_center, center + vec2(radius * 0.4, -radius * 0.4));
+                if (d_pos < radius * 0.3) col = mix(col, vec4(1.0, 0.2, 0.2, col.a), 0.8 * alpha);
+            }
+            if ((flags & BEHAVIOR_NEGATIVE) != 0u) {
+                float d_neg = distance(px_center, center + vec2(-radius * 0.4, radius * 0.4));
+                if (d_neg < radius * 0.3) col = mix(col, vec4(0.2, 0.4, 1.0, col.a), 0.8 * alpha);
+            }
+
+            if (polar) {
+                float d_north = distance(px_center, north_pt);
+                if (d_north < radius * 0.38f) {
+                    col = vec4(1.0f, 0.85f, 0.3f, col.a);
+                } else {
+                    vec2  to_px     = px_center - center;
+                    float len_to_px = length(to_px);
+                    float south_dot = (len_to_px > 0.0f)
+                                    ? dot(to_px / len_to_px, -dip_dir)
+                                    : 0.0f;
+                    float south_blend = max(0.0f, south_dot) * 0.45f;
+                    col = mix(col, vec4(0.3f, 0.5f, 1.0f, col.a), south_blend);
+                }
+            }
+
+            imageStore(out_render_texture, pixel_pos, col);
+        }
+    }
+}
+
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    
+    switch (params.step) {
+    case 0: if (i < params.particle_count) apply_physics(i);   break;
+    case 1: if (i < params.particle_count) render_particle(i); break;
+    case 2: grid_clear(i);   break;
+    case 3: if (i < params.particle_count) grid_count(i);   break;
+    case 4: if (gl_GlobalInvocationID.x == 0) grid_prefix_sum(); break;
+    case 5: if (i < params.particle_count) grid_sort(i);    break;
+    }
+}
