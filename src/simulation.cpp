@@ -74,7 +74,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         VkCommandBuffer compute_cmd = vk.begin_single_command();
 
         float scaled_dt = static_cast<float>(dt) * 5.0f;
-        compute.record(compute_cmd, cfg, scaled_dt);
+        compute.record(compute_cmd, cfg, scaled_dt, 0, 0.0f);
 
         vk.end_single_command(compute_cmd);
 

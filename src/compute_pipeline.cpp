@@ -434,7 +434,9 @@ void ComputePipeline::read_current_state(VulkanContext& ctx,
 
 void ComputePipeline::record(VkCommandBuffer cmd,
                              const SimConfig& cfg,
-                             float dt)
+                             float dt,
+                             uint32_t halo_count,
+                             float time_seconds)
 {
     if (pos_buffer_a_.handle == VK_NULL_HANDLE) return;
 
