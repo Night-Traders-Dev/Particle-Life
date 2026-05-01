@@ -226,53 +226,103 @@ void Interface::render_imgui(SimConfig&       cfg,
 
     ImGui::End();
 
-    // ── Particle Hover Logic ──────────────────────────────────────────────────
+    // ── Particle / Organism Hover Logic ──────────────────────────────────────
     if (!ImGui::GetIO().WantCaptureMouse) {
         ImVec2 mouse_pos = ImGui::GetIO().MousePos;
-        float  min_dist  = 10.0f; // pixel radius
-        int    closest   = -1;
+        glm::vec2 world_mouse = (glm::vec2(mouse_pos.x, mouse_pos.y) - glm::vec2(REGION_W/2, REGION_H/2)) / cfg.current_camera_zoom + cfg.camera_origin;
+
+        float  min_dist_particle = 10.0f / cfg.current_camera_zoom;
+        int    closest_particle  = -1;
         
-        // Simple O(N) check
+        // Check particles
         for (size_t i = 0; i < particles.positions.size(); ++i) {
-            float dist = glm::distance(particles.positions[i], glm::vec2(mouse_pos.x, mouse_pos.y));
-            if (dist < min_dist) {
-                min_dist = dist;
-                closest = (int)i;
+            float dist = glm::distance(particles.positions[i], world_mouse);
+            if (dist < min_dist_particle) {
+                min_dist_particle = dist;
+                closest_particle = (int)i;
             }
         }
-        hover_particle_index = closest;
-        if (closest != -1)
+        
+        hover_particle_index = closest_particle;
+        hover_organism_id = -1;
+
+        if (closest_particle != -1) {
+            hover_organism_id = (int64_t)particles.stats[closest_particle].current_organism_id;
+        } else {
+            // If no particle hovered, check organism centroids
+            float min_dist_org = 30.0f / cfg.current_camera_zoom;
+            for (const auto& org : org_manager.organisms) {
+                float dist = glm::distance(org.centroid, world_mouse);
+                if (dist < min_dist_org) {
+                    min_dist_org = dist;
+                    hover_organism_id = (int64_t)org.id;
+                }
+            }
+        }
+
+        if (hover_particle_index != -1 || hover_organism_id != -1)
             draw_hover_popup(particles, org_manager);
     }
 }
+
 void Interface::draw_hover_popup(const Particles& particles, const OrganismManager& org_manager) {
-    if (hover_particle_index < 0 || hover_particle_index >= (int)particles.positions.size()) return;
-
-    const ParticleStats& stats = particles.stats[hover_particle_index];
-    uint32_t type = particles.types[hover_particle_index];
-
     ImGui::BeginTooltip();
-    ImGui::Text("Particle Info");
-    ImGui::Separator();
-    ImGui::Text("Type: %u", type);
-    ImGui::Text("Conversions: %u", stats.conversion_count);
-    ImGui::Text("Age: %.1fs", stats.spawn_time);
 
-    if (stats.current_organism_id != -1) {
+    if (hover_particle_index != -1) {
+        const ParticleStats& stats = particles.stats[hover_particle_index];
+        uint32_t type = particles.types[hover_particle_index];
+        const glm::vec4& c = particles.colors[type];
+
+        ImGui::TextColored(ImVec4(c.r, c.g, c.b, 1.0f), "Particle #%d", hover_particle_index);
         ImGui::Separator();
-        ImGui::Text("Organism ID: %d", stats.current_organism_id);
+        ImGui::Text("Type: %u", type);
+        ImGui::Text("Age: %.1fs", stats.spawn_time);
+        ImGui::Text("Conversions: %u", stats.conversion_count);
+        if (stats.current_organism_id != -1)
+            ImGui::Text("Part of Organism #%d", stats.current_organism_id);
+    }
+
+    if (hover_organism_id != -1) {
+        if (hover_particle_index != -1) ImGui::Separator();
+
         const Organism* org = nullptr;
         for (const auto& o : org_manager.organisms) {
-            if (o.id == (uint32_t)stats.current_organism_id) {
+            if (o.id == (uint64_t)hover_organism_id) {
                 org = &o;
                 break;
             }
         }
+
         if (org) {
-            ImGui::Text("Size: %u", org->traits.size);
-            ImGui::Text("Dominant: %u", org->traits.dominant_type);
+            const glm::vec4& c = particles.colors[org->traits.dominant_type];
+            ImGui::TextColored(ImVec4(c.r, c.g, c.b, 1.0f), "Organism #%lu", org->id);
+            ImGui::Separator();
+            ImGui::Text("Dominant Type: %u", org->traits.dominant_type);
+            ImGui::Text("Size: %u particles", org->traits.size);
+            ImGui::Text("Avg Speed: %.2f", org->traits.avg_speed);
+            ImGui::Text("Generation: %u", org->traits.generation);
+            ImGui::Text("Kills: %u | Divisions: %u", org->traits.kills, org->traits.divisions);
+            
+            if (ImGui::BeginTable("org_types", 2, ImGuiTableFlags_SizingFixedFit)) {
+                for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+                    if (org->traits.type_counts[t] > 0) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        const glm::vec4& tc = particles.colors[t];
+                        ImGui::ColorButton("##t", ImVec4(tc.r, tc.g, tc.b, 1.0f), ImGuiColorEditFlags_NoTooltip, ImVec2(12, 12));
+                        ImGui::SameLine();
+                        ImGui::Text("Type %u:", t);
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%u", org->traits.type_counts[t]);
+                    }
+                }
+                ImGui::EndTable();
+            }
+        } else {
+            ImGui::Text("Organism #%ld (Lost trace...)", hover_organism_id);
         }
     }
+
     ImGui::EndTooltip();
 }
 

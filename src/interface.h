@@ -36,9 +36,10 @@ public:
     bool  reset_forces_check     = true;
 
     // Archetype preset selection
-    int  preset_selection[MAX_PARTICLE_TYPES] = {};
-    bool symmetry_enabled = false;
-    int  hover_particle_index = -1; // NEW
+    int      preset_selection[MAX_PARTICLE_TYPES] = {};
+    bool     symmetry_enabled = false;
+    int      hover_particle_index = -1;
+    int64_t  hover_organism_id = -1; // NEW: Track hovered organism
 
     // Initialise with a random seed
     void init();
