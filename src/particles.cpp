@@ -32,14 +32,14 @@ void Particles::gen_particles(const SimConfig& cfg) {
     types.clear();
     energy.clear();
 
-    const float rw = static_cast<float>(REGION_W);
-    const float rh = static_cast<float>(REGION_H);
+    const float rw = INFINITE_REGION_SIZE;
+    const float rh = INFINITE_REGION_SIZE;
 
     if (cfg.particle_count == 2) {
-        add_particle(glm::vec2(rw / 2.0f - 30.0f, rh / 2.0f),
+        add_particle(glm::vec2(0.0f, 0.0f),
                      glm::vec2(0.0f),
                      rand_range_i(0, (int)cfg.particle_types - 1));
-        add_particle(glm::vec2(rw / 2.0f + 30.0f, rh / 2.0f),
+        add_particle(glm::vec2(60.0f, 0.0f),
                      glm::vec2(0.0f),
                      rand_range_i(0, (int)cfg.particle_types - 1));
         // Init orientation arrays for 2-particle case
@@ -49,8 +49,8 @@ void Particles::gen_particles(const SimConfig& cfg) {
     }
 
     for (uint32_t i = 0; i < cfg.particle_count; ++i) {
-        glm::vec2 pos(rand_range_f(0.0f, rw),
-                      rand_range_f(0.0f, rh));
+        glm::vec2 pos(rand_range_f(-rw/2.0f, rw/2.0f),
+                      rand_range_f(-rh/2.0f, rh/2.0f));
         uint32_t t = static_cast<uint32_t>(rand_range_i(0, (int)cfg.particle_types - 1));
         add_particle(pos, glm::vec2(0.0f), t);
     }

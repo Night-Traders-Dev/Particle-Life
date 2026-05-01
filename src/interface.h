@@ -37,14 +37,18 @@ public:
 
     // Archetype preset selection
     int      preset_selection[MAX_PARTICLE_TYPES] = {};
-    bool     symmetry_enabled = false;
-    int      hover_particle_index = -1;
+    bool symmetry_enabled = false;
+    int  hover_particle_index = -1;
     int64_t  hover_organism_id = -1; // NEW: Track hovered organism
+
+    bool show_metrics_window = false; // NEW
+    int  metrics_tab = 0;             // NEW
 
     // Initialise with a random seed
     void init();
 
     void draw_hover_popup(const Particles& particles, const OrganismManager& org_manager); // NEW
+    void draw_metrics_window(SimConfig& cfg, Particles& particles, OrganismManager& org_manager); // NEW
 
     // Draw all ImGui windows and return updated config.
 

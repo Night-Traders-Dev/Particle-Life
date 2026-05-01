@@ -10,6 +10,7 @@
 
 static constexpr uint32_t REGION_W           = 2560;
 static constexpr uint32_t REGION_H           = 1440;
+static constexpr float    INFINITE_REGION_SIZE = 1000000.0f; // NEW: Simulation "infinite" bounds
 static constexpr uint32_t MAX_PARTICLE_TYPES = 10;
 static constexpr uint32_t GROUP_DENSITY      = 256;
 
