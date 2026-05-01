@@ -1,0 +1,51 @@
+❯ bash build.sh
+-- The CXX compiler identification is GNU 15.2.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found Vulkan: /home/kraken/vulkan/1.4.341.1/x86_64/lib/libvulkan.so (found version "1.4.341") found components: glslc glslangValidator
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Configuring done (8.6s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/kraken/Devel/Particle-Life/build
+[  5%] Compiling shader: compute.comp -> compute.spv
+[ 11%] Compiling shader: fullscreen.vert -> fullscreen.vert.spv
+[ 16%] Compiling shader: fullscreen.frag -> fullscreen.frag.spv
+[ 16%] Built target shaders
+[ 22%] Building CXX object CMakeFiles/particle_life.dir/src/vulkan_context.cpp.o
+[ 27%] Building CXX object CMakeFiles/particle_life.dir/src/main.cpp.o
+[ 33%] Building CXX object CMakeFiles/particle_life.dir/src/particles.cpp.o
+[ 38%] Building CXX object CMakeFiles/particle_life.dir/src/compute_pipeline.cpp.o
+[ 44%] Building CXX object CMakeFiles/particle_life.dir/src/renderer.cpp.o
+[ 50%] Building CXX object CMakeFiles/particle_life.dir/src/interface.cpp.o
+[ 55%] Building CXX object CMakeFiles/particle_life.dir/src/simulation.cpp.o
+[ 61%] Building CXX object CMakeFiles/particle_life.dir/_deps/imgui-src/imgui.cpp.o
+[ 66%] Building CXX object CMakeFiles/particle_life.dir/_deps/imgui-src/imgui_draw.cpp.o
+[ 72%] Building CXX object CMakeFiles/particle_life.dir/src/organism.cpp.o
+[ 77%] Building CXX object CMakeFiles/particle_life.dir/_deps/imgui-src/imgui_tables.cpp.o
+[ 83%] Building CXX object CMakeFiles/particle_life.dir/_deps/imgui-src/backends/imgui_impl_glfw.cpp.o
+[ 88%] Building CXX object CMakeFiles/particle_life.dir/_deps/imgui-src/imgui_widgets.cpp.o
+[ 94%] Building CXX object CMakeFiles/particle_life.dir/_deps/imgui-src/backends/imgui_impl_vulkan.cpp.o
+/home/kraken/Devel/Particle-Life/src/interface.cpp: In member function ‘void Interface::draw_conversion_panel(Particles&, const SimConfig&)’:
+/home/kraken/Devel/Particle-Life/src/interface.cpp:516:36: error: qualified-id in declaration before ‘(’ token
+  516 | void Interface::draw_metrics_window(SimConfig& cfg, Particles& particles, OrganismManager& org_manager) {
+      |                                    ^
+/home/kraken/Devel/Particle-Life/src/interface.cpp:583:2: error: expected ‘}’ at end of input
+  583 | }
+      |  ^
+/home/kraken/Devel/Particle-Life/src/interface.cpp:509:83: note: to match this ‘{’
+  509 | void Interface::draw_conversion_panel(Particles& particles, const SimConfig& cfg) {
+      |                                                                                   ^
+/home/kraken/Devel/Particle-Life/src/interface.cpp:509:50: warning: unused parameter ‘particles’ [-Wunused-parameter]
+  509 | void Interface::draw_conversion_panel(Particles& particles, const SimConfig& cfg) {
+      |                                       ~~~~~~~~~~~^~~~~~~~~
+gmake[2]: *** [CMakeFiles/particle_life.dir/build.make:149: CMakeFiles/particle_life.dir/src/interface.cpp.o] Error 1
+gmake[2]: *** Waiting for unfinished jobs....
+gmake[1]: *** [CMakeFiles/Makefile2:90: CMakeFiles/particle_life.dir/all] Error 2
+gmake: *** [Makefile:136: all] Error 2
+
+~/Devel/Particle-Life main 
