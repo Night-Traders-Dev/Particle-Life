@@ -200,7 +200,7 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
         double mx2, my2;
         glfwGetCursorPos(window, &mx2, &my2);
         glm::vec2 mouse_pos2 = { static_cast<float>(mx2), static_cast<float>(my2) };
-        glm::vec2 world_pos  = (mouse_pos2 - glm::vec2(REGION_W/2, REGION_H/2)) / cfg.current_camera_zoom + cfg.camera_origin;
+        glm::vec2 world_pos  = (mouse_pos2 - glm::vec2(1280.0f, 720.0f)) / cfg.current_camera_zoom + cfg.camera_origin;
 
         // Sync CPU particle arrays from current GPU state so resize_buffers
         // doesn't snap every particle back to its initial spawn position.

@@ -87,9 +87,11 @@ vec2 random2(float v) {
 }
 
 uint get_cell_index(vec2 pos) {
-    uint cx = uint(clamp(pos.x / float(GRID_CELL_SIZE), 0.0, float(GRID_W - 1u)));
-    uint cy = uint(clamp(pos.y / float(GRID_CELL_SIZE), 0.0, float(GRID_H - 1u)));
-    return cx + cy * GRID_W;
+    int cx = int(floor(pos.x / float(GRID_CELL_SIZE))) % int(GRID_W);
+    int cy = int(floor(pos.y / float(GRID_CELL_SIZE))) % int(GRID_H);
+    if (cx < 0) cx += int(GRID_W);
+    if (cy < 0) cy += int(GRID_H);
+    return uint(cx + cy * int(GRID_W));
 }
 
 void grid_clear(uint i) {
@@ -310,7 +312,7 @@ void apply_physics(uint i) {
 
     if (rebirth) {
         vec2 r = random2(float(i) + pos_a.x * 1.123f + params.dt);
-        pos_a = r * params.region_size;
+        pos_a = (r - 0.5f) * params.region_size;
         vel_a = vec2(0.0f);
         energy_a = 1.0f;
     } else {
@@ -342,15 +344,15 @@ void render_particle(uint i) {
     float energy = energy_in_buffer.data[i];
     bool  polar  = (flags & BEHAVIOR_POLAR) != 0u;
 
-    vec2  screen_center = params.region_size * 0.5f;
+    vec2  viewport_center = vec2(1280.0, 720.0);
     float radius = params.radius * params.camera_zoom * clamp(energy, 0.5f, 1.5f);
     int   range  = int(ceil(radius));
     float r      = float(range);
 
-    vec2 center = screen_center + (pos - params.camera_origin) * params.camera_zoom;
+    vec2 center = viewport_center + (pos - params.camera_origin) * params.camera_zoom;
 
-    if (center.x + r < 0.0f || center.x - r > params.region_size.x) return;
-    if (center.y + r < 0.0f || center.y - r > params.region_size.y) return;
+    if (center.x + r < 0.0f || center.x - r > 2560.0) return;
+    if (center.y + r < 0.0f || center.y - r > 1440.0) return;
 
     float angle   = polar ? angle_in_buffer.data[i] : 0.0f;
     vec2  dip_dir = polar ? vec2(cos(angle), sin(angle)) : vec2(0.0f);

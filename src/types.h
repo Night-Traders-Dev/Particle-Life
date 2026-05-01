@@ -131,7 +131,7 @@ struct SimConfig {
     ConversionData conversion_matrix[MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES];
 
     // Camera state (managed by simulation)
-    glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
+    glm::vec2 camera_origin      = { 0.0f, 0.0f };
     float     camera_zoom        = 1.0f;
     float     current_camera_zoom = 1.0f;
 

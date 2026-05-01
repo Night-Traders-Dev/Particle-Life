@@ -445,10 +445,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     uint32_t particle_count    = static_cast<uint32_t>(cfg.particle_count);
 
     PushConstants pc{};
-    pc.region_size = {
-        static_cast<float>(REGION_W) + cfg.radius * 2.0f,
-        static_cast<float>(REGION_H) + cfg.radius * 2.0f
-    };
+    pc.region_size = { 1000000.0f, 1000000.0f };
     pc.camera_origin      = cfg.camera_origin;
     pc.particle_count     = particle_count;
     pc.particle_types     = static_cast<uint32_t>(cfg.particle_types);
