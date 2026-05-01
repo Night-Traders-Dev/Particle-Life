@@ -15,7 +15,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libvulkan-dev vulkan-tools glslang-tools libglfw3-dev libglm-dev cmake g++
+        sudo apt-get install -y libvulkan-dev vulkan-tools glslang-tools glslc libglfw3-dev libglm-dev cmake g++
 
     - name: Build
       run: |

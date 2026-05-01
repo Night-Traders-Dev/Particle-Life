@@ -19,7 +19,6 @@ void Interface::init() {
 // ── Force colour helper ───────────────────────────────────────────────────────
 
 ImVec4 Interface::force_to_color(float f) {
-    float abs_f = std::abs(f);
     glm::vec4 c = calc_force_button_color(f);
     return { c.r, c.g, c.b, 1.0f };
 }
@@ -38,7 +37,8 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::NewFrame();
 
     if (!settings_visible) {
-        ImGui::Render();
+        // Settings panel hidden; status bar (added in renderer) and final
+        // ImGui::Render() are emitted by Renderer::record_command_buffer().
         return;
     }
 
@@ -143,7 +143,8 @@ void Interface::render_imgui(SimConfig&       cfg,
 
     ImGui::End();
 
-    ImGui::Render();
+    // ImGui::Render() is invoked once per frame by
+    // Renderer::record_command_buffer() after the status bar is appended.
 }
 
 // ── Particle grid ─────────────────────────────────────────────────────────────
@@ -413,14 +414,14 @@ void Interface::draw_conversion_panel(Particles& particles, const SimConfig& cfg
     static int type_a = 0;
     static int type_b = 0;
 
-    ImGui::Combo("From Type", &type_a, [](void* data, int idx, const char** out) {
+    ImGui::Combo("From Type", &type_a, [](void* /*data*/, int idx, const char** out) {
         static char buf[32];
         sprintf(buf, "Type %d", idx);
         *out = buf;
         return true;
     }, nullptr, pt);
 
-    ImGui::Combo("To Type", &type_b, [](void* data, int idx, const char** out) {
+    ImGui::Combo("To Type", &type_b, [](void* /*data*/, int idx, const char** out) {
         static char buf[32];
         sprintf(buf, "Type %d", idx);
         *out = buf;

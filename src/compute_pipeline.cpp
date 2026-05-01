@@ -6,27 +6,25 @@
 // ── Init / Destroy ────────────────────────────────────────────────────────────
 
 void ComputePipeline::init(VulkanContext& ctx, const std::string& shader_spv_path) {
-    // Create the render texture (REGION_W × REGION_H, rgba32f)
-    particle_texture = ctx.create_image(
-        REGION_W, REGION_H,
-        VK_FORMAT_R32G32B32A32_SFLOAT,
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    const VkFormat HDR_FMT = VK_FORMAT_R16G16B16A16_SFLOAT;
 
-    particle_texture.view = ctx.create_image_view(
-        particle_texture.handle,
-        VK_FORMAT_R32G32B32A32_SFLOAT,
-        VK_IMAGE_ASPECT_COLOR_BIT);
+    auto make_storage_img = [&](Image& img, uint32_t w, uint32_t h) {
+        img = ctx.create_image(
+            w, h, HDR_FMT,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        img.view = ctx.create_image_view(img.handle, HDR_FMT, VK_IMAGE_ASPECT_COLOR_BIT);
+        ctx.transition_image_layout(img.handle,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    };
 
-    // Transition the image to GENERAL so the compute shader can write to it
-    ctx.transition_image_layout(
-        particle_texture.handle,
-        VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_IMAGE_LAYOUT_GENERAL);
+    make_storage_img(particle_texture, REGION_W, REGION_H);
+    make_storage_img(bloom_lo,         BLOOM_W,  BLOOM_H);
+    make_storage_img(bloom_blur,       BLOOM_W,  BLOOM_H);
+    make_storage_img(composite_tex,    REGION_W, REGION_H);
 
     particle_texture_view = particle_texture.view;
-
-    sampler = ctx.create_sampler_nearest();
+    sampler = ctx.create_sampler_linear();
 
     create_descriptor_set_layout(ctx.device);
     create_pipeline_layout(ctx.device);
@@ -43,6 +41,9 @@ void ComputePipeline::destroy(VulkanContext& ctx) {
     if (desc_set_layout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx.device, desc_set_layout_, nullptr);
     if (sampler          != VK_NULL_HANDLE) vkDestroySampler(ctx.device, sampler, nullptr);
     ctx.destroy_image(particle_texture);
+    ctx.destroy_image(bloom_lo);
+    ctx.destroy_image(bloom_blur);
+    ctx.destroy_image(composite_tex);
 }
 
 // ── Descriptor set layout ─────────────────────────────────────────────────────
@@ -55,26 +56,20 @@ void ComputePipeline::destroy(VulkanContext& ctx) {
 // Binding 16: sorted particle indices
 
 void ComputePipeline::create_descriptor_set_layout(VkDevice device) {
-    std::array<VkDescriptorSetLayoutBinding, 18> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, NUM_BINDINGS> bindings{};
 
-    // Storage buffers: 0-6, 8-17 (excluding 7)
-    for (uint32_t i = 0; i < 7; ++i) {
+    // Default everything to STORAGE_BUFFER.
+    for (uint32_t i = 0; i < NUM_BINDINGS; ++i) {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
     }
-    for (uint32_t i = 8; i < 18; ++i) {
-        bindings[i].binding         = i;
-        bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    // Storage-image bindings: 7 (particle splat), 18 (bloom_lo), 19 (bloom_blur), 20 (composite).
+    for (uint32_t i : { 7u, 18u, 19u, 20u }) {
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     }
-    // Binding 7: storage image
-    bindings[7].binding         = 7;
-    bindings[7].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    bindings[7].descriptorCount = 1;
-    bindings[7].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    // 21 is the halo SSBO — already STORAGE_BUFFER by default.
 
     VkDescriptorSetLayoutCreateInfo ci{};
     ci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -131,11 +126,12 @@ void ComputePipeline::create_compute_pipeline(VulkanContext& ctx,
 // ── Descriptor pool ───────────────────────────────────────────────────────────
 
 void ComputePipeline::create_descriptor_pool(VkDevice device) {
-    // 2 sets × 17 storage buffers = 34
-    // 2 sets × 1 storage image = 2
+    // 22 bindings total per set, 2 sets:
+    //   storage buffers: bindings 0-6, 8-17, 21  -> 18 per set
+    //   storage images : bindings 7, 18, 19, 20  ->  4 per set
     std::array<VkDescriptorPoolSize, 2> pool_sizes{};
-    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 34 };
-    pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,   2 };
+    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 18 * 2 };
+    pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,   4 * 2 };
 
     VkDescriptorPoolCreateInfo ci{};
     ci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -165,6 +161,7 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     VkDeviceSize grid_size     = GRID_SIZE                     * sizeof(uint32_t);
     VkDeviceSize index_size    = particles.positions.size()  * sizeof(uint32_t);
     VkDeviceSize conv_size     = MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES * sizeof(ConversionData);
+    VkDeviceSize halo_size     = MAX_HALOS * sizeof(OrganismHaloGPU);
 
     pos_buffer_a_          = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
     pos_buffer_b_          = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
@@ -184,6 +181,7 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     grid_counts_buffer_    = ctx.create_buffer(grid_size,     BUF_USAGE, MEM_PROPS);
     sorted_indices_buffer_ = ctx.create_buffer(index_size,    BUF_USAGE, MEM_PROPS);
     conversion_buffer_     = ctx.create_buffer(conv_size,     BUF_USAGE, MEM_PROPS);
+    halo_buffer_           = ctx.create_buffer(halo_size,     BUF_USAGE, MEM_PROPS);
 
     // Upload initial data
     ctx.update_buffer(pos_buffer_a_,  particles.positions.data(),        pos_size);
@@ -201,6 +199,10 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     ctx.update_buffer(energy_buffer_a_, particles.energy.data(),         energy_size);
     ctx.update_buffer(energy_buffer_b_, particles.energy.data(),         energy_size);
     ctx.update_buffer(conversion_buffer_, particles.conversion_matrix,   conv_size);
+
+    // Halo buffer initialised to zeros (no halos until OrganismManager populates it).
+    std::vector<OrganismHaloGPU> empty_halos(MAX_HALOS, OrganismHaloGPU{});
+    ctx.update_buffer(halo_buffer_, empty_halos.data(), halo_size);
 
     allocate_and_write_descriptor_sets(ctx);
 
@@ -235,6 +237,7 @@ void ComputePipeline::clear_buffers(VulkanContext& ctx) {
     ctx.destroy_buffer(grid_counts_buffer_);
     ctx.destroy_buffer(sorted_indices_buffer_);
     ctx.destroy_buffer(conversion_buffer_);
+    ctx.destroy_buffer(halo_buffer_);
 }
 
 // ── Write descriptor sets ─────────────────────────────────────────────────────
@@ -286,12 +289,14 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     desc_set_a_ = sets[0];
     desc_set_b_ = sets[1];
 
+    // 2 sets × 22 bindings = 44 writes; 2 sets × 18 buffers = 36 buf infos;
+    // 2 sets × 4 storage images = 8 img infos.
     std::vector<VkWriteDescriptorSet>    writes;
     std::vector<VkDescriptorBufferInfo>  buf_infos;
     std::vector<VkDescriptorImageInfo>   img_infos;
-    writes.reserve(36);
-    buf_infos.reserve(34);
-    img_infos.reserve(2);
+    writes.reserve(64);
+    buf_infos.reserve(64);   // generous; vectors must NOT reallocate (pointer stability)
+    img_infos.reserve(16);
 
     auto pos_sz  = pos_buffer_a_.size;
     auto vel_sz  = vel_buffer_a_.size;
@@ -304,6 +309,7 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     auto grd_sz  = grid_offsets_buffer_.size;
     auto idx_sz  = sorted_indices_buffer_.size;
     auto cnv_sz  = conversion_buffer_.size;
+    auto halo_sz = halo_buffer_.size;
 
     // ── Set A: in=a, out=b ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_a_,  0, pos_buffer_a_.handle,         pos_sz);
@@ -324,6 +330,10 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_a_, 15, grid_offsets_buffer_.handle,  grd_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 16, sorted_indices_buffer_.handle, idx_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 17, conversion_buffer_.handle,    cnv_sz);
+    write_storage_image (writes, img_infos, desc_set_a_, 18, bloom_lo.view);
+    write_storage_image (writes, img_infos, desc_set_a_, 19, bloom_blur.view);
+    write_storage_image (writes, img_infos, desc_set_a_, 20, composite_tex.view);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 21, halo_buffer_.handle,           halo_sz);
 
     // ── Set B: in=b, out=a ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_b_,  0, pos_buffer_b_.handle,         pos_sz);
@@ -344,6 +354,10 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_b_, 15, grid_offsets_buffer_.handle,  grd_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 16, sorted_indices_buffer_.handle, idx_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 17, conversion_buffer_.handle,    cnv_sz);
+    write_storage_image (writes, img_infos, desc_set_b_, 18, bloom_lo.view);
+    write_storage_image (writes, img_infos, desc_set_b_, 19, bloom_blur.view);
+    write_storage_image (writes, img_infos, desc_set_b_, 20, composite_tex.view);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 21, halo_buffer_.handle,           halo_sz);
 
     vkUpdateDescriptorSets(ctx.device,
                            static_cast<uint32_t>(writes.size()),
@@ -373,6 +387,16 @@ void ComputePipeline::upload_dynamic_data(VulkanContext& ctx, const Particles& p
     ctx.update_buffer(color_buffer_,    particles.colors.data(),       color_size);
     ctx.update_buffer(behavior_buffer_, particles.behavior_flags,      behavior_size);
     ctx.update_buffer(conversion_buffer_, particles.conversion_matrix, conv_size);
+}
+
+void ComputePipeline::upload_halos(VulkanContext& ctx,
+                                   const OrganismHaloGPU* halos,
+                                   uint32_t count)
+{
+    if (halo_buffer_.handle == VK_NULL_HANDLE) return;
+    if (count > MAX_HALOS) count = MAX_HALOS;
+    if (count == 0) return;
+    ctx.update_buffer(halo_buffer_, halos, count * sizeof(OrganismHaloGPU));
 }
 
 void ComputePipeline::read_current_state(VulkanContext& ctx,
@@ -558,7 +582,7 @@ void ComputePipeline::dispatch(VkCommandBuffer cmd,
     vkCmdDispatch(cmd, groups, 1, 1);
 }
 
-void ComputePipeline::resize_buffers(VulkanContext& ctx, const Particles& particles, uint32_t new_count) {
+void ComputePipeline::resize_buffers(VulkanContext& ctx, const Particles& particles) {
     vkDeviceWaitIdle(ctx.device);
     
     // Clear old buffers and descriptor pool

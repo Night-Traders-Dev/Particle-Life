@@ -59,7 +59,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
 
     if (cfg.particle_count != prev_count) {
         particles.gen_data(cfg);
-        compute.resize_buffers(vk, particles, cfg.particle_count);
+        compute.resize_buffers(vk, particles);
         organism_tick_counter_ = 0;
     }
 
@@ -96,9 +96,9 @@ void Simulation::tick(GLFWwindow* window, double dt) {
 
     // ── Draw frame (fullscreen quad + ImGui) ──────────────────────────────────
     if (renderer.swapchain_dirty)
-        renderer.on_resize(vk, window, compute);
+        renderer.on_resize(vk, window);
 
-    renderer.draw_frame(vk, window, compute, is_active);
+    renderer.draw_frame(vk, compute, is_active, cfg, particles, organism_manager);
 }
 
 // ── Input handling ────────────────────────────────────────────────────────────
@@ -126,7 +126,7 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
 
     // F2: reset simulation
     static bool f2_prev = false;
-    bool f2_cur = (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS);
+    bool f2_cur = (glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS);
     if (f2_cur && !f2_prev)
         reset();
     f2_prev = f2_cur;
@@ -176,18 +176,42 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
     // ── Mouse: spawn particle ───────────────────────────────────────────────
     static bool lmb_down_prev = false;
     bool lmb_down_curr = (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);
-    if (lmb_down_curr && !lmb_down_prev && !iface.mouse_within) {
-        double mx, my;
-        glfwGetCursorPos(window, &mx, &my);
-        glm::vec2 mouse_pos = { static_cast<float>(mx), static_cast<float>(my) };
-        glm::vec2 world_pos = (mouse_pos - glm::vec2(REGION_W/2, REGION_H/2)) / cfg.current_camera_zoom + cfg.camera_origin;
-        
-        particles.add_particle(world_pos, {0.0f, 0.0f}, 0);
+    if (lmb_down_curr && !lmb_down_prev && !iface.mouse_within && is_active && compute.is_ready()) {
+        double mx2, my2;
+        glfwGetCursorPos(window, &mx2, &my2);
+        glm::vec2 mouse_pos2 = { static_cast<float>(mx2), static_cast<float>(my2) };
+        glm::vec2 world_pos  = (mouse_pos2 - glm::vec2(REGION_W/2, REGION_H/2)) / cfg.current_camera_zoom + cfg.camera_origin;
+
+        // Sync CPU particle arrays from current GPU state so resize_buffers
+        // doesn't snap every particle back to its initial spawn position.
+        // (positions / velocities / types are double-buffered on the GPU; the
+        // angle/energy buffers are not read back here — losing them on spawn
+        // is acceptable and avoids extra readback paths.)
+        const uint32_t n = cfg.particle_count;
+        particles.positions.resize(n);
+        particles.velocities.resize(n);
+        particles.types.resize(n);
+        compute.read_current_state(vk,
+                                   particles.positions,
+                                   particles.velocities,
+                                   particles.types);
+
+        // Keep per-particle aux arrays in lock-step with positions.
+        particles.energy.assign(n, 1.0f);
+        particles.angles.resize(n, 0.0f);
+        particles.angular_velocities.resize(n, 0.0f);
+
+        // Append the new particle and rebuild GPU buffers.
+        particles.add_particle(world_pos, glm::vec2(0.0f), 0);
         cfg.particle_count++;
-        iface.particle_count_slider = std::sqrt((float)cfg.particle_count);
-        compute.resize_buffers(vk, particles, cfg.particle_count);
+        iface.particle_count_slider = std::sqrt(static_cast<float>(cfg.particle_count));
+        compute.resize_buffers(vk, particles);
     }
     lmb_down_prev = lmb_down_curr;
+
+    // Ensure right click doesn't trigger anything else (e.g. reset)
+    // Right button is handled by the force grid/UI specifically
+    // Removed the problematic f2 logic previously attached to mouse button.
 }
 
 // ── Scroll callback (called from main.cpp) ────────────────────────────────────
@@ -200,7 +224,7 @@ static void scroll_callback(GLFWwindow*, double, double y_offset) {
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantCaptureMouse) return;  // ImGui consumed this
 
-    float& zoom = g_sim->cfg.camera_zoom;
+    float& zoom = g_sim->cfg.current_camera_zoom;
     if (y_offset > 0)
         zoom *= 1.25f;
     else if (y_offset < 0)

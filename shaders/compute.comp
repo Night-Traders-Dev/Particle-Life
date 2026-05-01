@@ -347,18 +347,23 @@ void render_particle(uint i) {
     vec2  dip_dir = polar ? vec2(cos(angle), sin(angle)) : vec2(0.0f);
     vec2  north_pt = center + dip_dir * (radius * 0.55f);
 
-    vec2  screen_pos = center - vec2(r, r);
+    // Iterate the bounding square centered on the particle. The previous code
+    // anchored the loop at (center - r) and then walked an extra [-range,+range]
+    // offset on top, producing a one-quadrant splat that read as a square.
+    ivec2 base = ivec2(floor(center));
 
-    for (int x = -range; x <= range; x++) {
-        for (int y = -range; y <= range; y++) {
-            ivec2 pixel_pos = ivec2(floor(screen_pos)) + ivec2(x, y);
+    for (int dy = -range; dy <= range; dy++) {
+        for (int dx = -range; dx <= range; dx++) {
+            ivec2 pixel_pos = base + ivec2(dx, dy);
             vec2  px_center = vec2(pixel_pos) + 0.5f;
 
-            float d_main = distance(px_center, center);
-            if (d_main >= radius) continue;
+            float d_circle = distance(px_center, center);
+            if (d_circle > radius) continue;
 
-            // Anti-aliased disk rendering
-            float alpha = 1.0 - smoothstep(radius * 0.8, radius, d_main);
+            // Anti-aliased disk rendering: 1-pixel falloff band keeps small
+            // circles smooth and round even at radius ~2px.
+            float aa_band = max(1.0, radius * 0.2);
+            float alpha   = 1.0 - smoothstep(radius - aa_band, radius, d_circle);
             vec4 col = color_buffer.data[type];
             col.a *= clamp(energy * 2.0f, 0.2f, 1.0f) * alpha;
 

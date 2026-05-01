@@ -67,6 +67,8 @@ void Particles::add_particle(glm::vec2 pos, glm::vec2 vel, uint32_t type) {
     velocities.push_back(vel);
     types.push_back(type);
     energy.push_back(1.0f);
+    angles.push_back(0.0f);
+    angular_velocities.push_back(0.0f);
 }
 
 void Particles::gen_random_force_matrix() {

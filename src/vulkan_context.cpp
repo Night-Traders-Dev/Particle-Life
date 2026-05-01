@@ -568,3 +568,17 @@ VkSampler VulkanContext::create_sampler_nearest() {
     VK_CHECK(vkCreateSampler(device, &ci, nullptr, &sampler));
     return sampler;
 }
+
+VkSampler VulkanContext::create_sampler_linear() {
+    VkSamplerCreateInfo ci{};
+    ci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    ci.magFilter    = VK_FILTER_LINEAR;
+    ci.minFilter    = VK_FILTER_LINEAR;
+    ci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    ci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    VkSampler sampler;
+    VK_CHECK(vkCreateSampler(device, &ci, nullptr, &sampler));
+    return sampler;
+}

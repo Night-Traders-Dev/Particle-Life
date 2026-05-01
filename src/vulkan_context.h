@@ -102,6 +102,7 @@ public:
 
     // ── Sampler helpers ───────────────────────────────────────────────────────
     VkSampler create_sampler_nearest();
+    VkSampler create_sampler_linear();
 
     // ── Misc ──────────────────────────────────────────────────────────────────
     uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags props);

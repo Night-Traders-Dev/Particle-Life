@@ -280,9 +280,8 @@ void Renderer::create_sync_objects(VulkanContext& ctx) {
     VkCommandBuffer cmds[FRAMES_IN_FLIGHT];
     VK_CHECK(vkAllocateCommandBuffers(ctx.device, &alloc, cmds));
 
-    VkSemaphoreCreateInfo sem_ci{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
-    VkFenceCreateInfo     fen_ci{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-    fen_ci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    VkSemaphoreCreateInfo sem_ci{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, nullptr, 0 };
+    VkFenceCreateInfo     fen_ci{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, nullptr, VK_FENCE_CREATE_SIGNALED_BIT };
 
     for (int i = 0; i < FRAMES_IN_FLIGHT; ++i) {
         frames_[i].cmd = cmds[i];
@@ -356,10 +355,13 @@ void Renderer::init_imgui(VulkanContext& ctx, GLFWwindow* window) {
 // ── Main draw frame ───────────────────────────────────────────────────────────
 
 bool Renderer::draw_frame(VulkanContext& ctx,
-                          GLFWwindow*   window,
                           ComputePipeline& compute,
-                          bool sim_active)
+                          bool sim_active,
+                          SimConfig& cfg,
+                          Particles& particles,
+                          OrganismManager& org_manager)
 {
+    (void)sim_active;
     FrameData& frame = frames_[current_frame_];
 
     vkWaitForFences(ctx.device, 1, &frame.in_flight, VK_TRUE, UINT64_MAX);
@@ -378,7 +380,7 @@ bool Renderer::draw_frame(VulkanContext& ctx,
     // Record
     VkCommandBuffer cmd = frame.cmd;
     vkResetCommandBuffer(cmd, 0);
-    record_command_buffer(cmd, image_index, ctx, compute, sim_active);
+    record_command_buffer(cmd, image_index, ctx, compute, sim_active, cfg, particles, org_manager);
 
     // Submit
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -412,7 +414,7 @@ bool Renderer::draw_frame(VulkanContext& ctx,
     return true;
 }
 
-void Renderer::on_resize(VulkanContext& ctx, GLFWwindow* window, ComputePipeline& compute) {
+void Renderer::on_resize(VulkanContext& ctx, GLFWwindow* window) {
     vkDeviceWaitIdle(ctx.device);
     ctx.recreate_swapchain(window);
     rebuild_framebuffers(ctx);
@@ -425,8 +427,13 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd,
                                      uint32_t        image_index,
                                      VulkanContext&  ctx,
                                      ComputePipeline& compute,
-                                     bool            sim_active)
+                                     bool            sim_active,
+                                     SimConfig& cfg,
+                                     Particles& particles,
+                                     OrganismManager& org_manager)
 {
+    (void)compute;
+    (void)sim_active;
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     VK_CHECK(vkBeginCommandBuffer(cmd, &begin));
@@ -467,6 +474,40 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd,
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             quad_pipe_layout_, 0, 1, &quad_desc_set_, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0); // 3 vertices → fullscreen triangle
+
+    // Status Bar
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, 30), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.5f)); // Semi-transparent black
+    ImGui::Begin("Status Bar", nullptr, 
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+    
+    // Total particles
+    ImGui::Text("Particles: %u | ", cfg.particle_count);
+    ImGui::SameLine();
+    
+    // Per-type counts
+    ImGui::Text("Types: ");
+    for(uint32_t t = 0; t < cfg.particle_types; ++t) {
+        uint32_t count = 0;
+        for(uint32_t i = 0; i < particles.types.size(); ++i) {
+            if(particles.types[i] == t) count++;
+        }
+        ImGui::SameLine();
+        ImGui::Text("[%u: %u] ", t, count);
+    }
+    ImGui::SameLine();
+    
+    // Organism count
+    ImGui::Text("| Organisms: %zu", org_manager.organisms.size());
+    
+    ImGui::End();
+    ImGui::PopStyleColor();
+
+    // Single ImGui::Render() per frame: finalises both the settings panel
+    // (queued in Interface::render_imgui) and the status bar above.
+    ImGui::Render();
 
     // ImGui
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);

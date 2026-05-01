@@ -6,6 +6,10 @@
 #include <GLFW/glfw3.h>
 #include <vector>
 
+class OrganismManager;
+class SimConfig;
+class Particles;
+
 static constexpr int FRAMES_IN_FLIGHT = 2;
 
 // ── Per-frame sync objects ────────────────────────────────────────────────────
@@ -36,12 +40,14 @@ public:
     // Submit a complete frame: compute + fullscreen quad + ImGui
     // Returns false if swapchain needs recreation
     bool draw_frame(VulkanContext& ctx,
-                    GLFWwindow*   window,
                     ComputePipeline& compute,
-                    bool sim_active);
+                    bool sim_active,
+                    SimConfig& cfg,
+                    Particles& particles,
+                    OrganismManager& org_manager);
 
     // Called when framebuffer is resized
-    void on_resize(VulkanContext& ctx, GLFWwindow* window, ComputePipeline& compute);
+    void on_resize(VulkanContext& ctx, GLFWwindow* window);
 
 private:
     VkRenderPass              render_pass_          = VK_NULL_HANDLE;
@@ -75,5 +81,8 @@ private:
                                uint32_t        image_index,
                                VulkanContext&  ctx,
                                ComputePipeline& compute,
-                               bool            sim_active);
+                               bool            sim_active,
+                               SimConfig& cfg,
+                               Particles& particles,
+                               OrganismManager& org_manager);
 };

@@ -12,11 +12,15 @@
 
 class ComputePipeline {
 public:
-    // The storage image written by the compute shader.
-    // Renderer reads this to display the simulation.
+    // Particle splat target (HDR, full resolution). Read by post chain.
     Image         particle_texture{};
     VkImageView   particle_texture_view = VK_NULL_HANDLE; // same as particle_texture.view
-    VkSampler     sampler               = VK_NULL_HANDLE;
+    VkSampler     sampler               = VK_NULL_HANDLE; // linear, used by quad pipeline
+
+    // Post-processing intermediate images.
+    Image         bloom_lo{};       // ½ res bright-pass + h-blur target
+    Image         bloom_blur{};     // ½ res v-blur target
+    Image         composite_tex{};  // full-res final image (read by fullscreen quad)
 
     int tick = 0;
 
@@ -28,15 +32,22 @@ public:
     void create_buffers(VulkanContext& ctx, const Particles& particles);
     void clear_buffers(VulkanContext& ctx);
 
-    // Record the two compute dispatches into cmd for one simulation frame.
-    // step=0: physics,  step=1: render-to-texture
+    // Record all compute dispatches for one simulation frame:
+    // grid → physics → particle splat → bright-pass → blur-h → blur-v → composite
     void record(VkCommandBuffer cmd,
                 const SimConfig& cfg,
-                float dt);
+                float dt,
+                uint32_t halo_count,
+                float    time_seconds);
 
     // Upload force + color arrays (called each frame before record())
     void upload_dynamic_data(VulkanContext& ctx,
                              const Particles& particles);
+
+    // Upload organism halo array (called each frame after OrganismManager update)
+    void upload_halos(VulkanContext& ctx,
+                      const OrganismHaloGPU* halos,
+                      uint32_t count);
 
     bool is_ready() const { return pos_buffer_a_.handle != VK_NULL_HANDLE; }
 
@@ -48,7 +59,7 @@ public:
                             std::vector<uint32_t>& out_types) const;
 
     // Resizes buffers and descriptor sets when particle count changes
-    void resize_buffers(VulkanContext& ctx, const Particles& particles, uint32_t new_count);
+    void resize_buffers(VulkanContext& ctx, const Particles& particles);
 
 private:
     VkPipeline            pipeline_             = VK_NULL_HANDLE;
@@ -83,17 +94,22 @@ private:
     Buffer sorted_indices_buffer_{};
     Buffer conversion_buffer_{};
 
+    // Organism halo data (uploaded each frame from OrganismManager).
+    Buffer halo_buffer_{};
+
     // Descriptor sets: set_a uses (a→in, b→out), set_b uses (b→in, a→out)
     VkDescriptorSet desc_set_a_ = VK_NULL_HANDLE;
     VkDescriptorSet desc_set_b_ = VK_NULL_HANDLE;
 
     // Bindings:
-    // 0: in pos, 1: in vel, 2: types, 3: forces, 4: colors, 
-    // 5: out pos, 6: out vel, 7: render texture, 8: behaviors,
+    // 0: in pos, 1: in vel, 2: types, 3: forces, 4: colors,
+    // 5: out pos, 6: out vel, 7: particle render texture, 8: behaviors,
     // 9: in angle, 10: in avel, 11: out angle, 12: out avel,
-    // 13: in energy, 14: out energy, 
-    // 15: grid offsets, 16: sorted indices, 17: conversion matrix
-    static constexpr uint32_t NUM_BINDINGS = 18;
+    // 13: in energy, 14: out energy,
+    // 15: grid offsets, 16: sorted indices, 17: conversion matrix,
+    // 18: bloom_lo (storage image), 19: bloom_blur (storage image),
+    // 20: composite_tex (storage image), 21: halo buffer
+    static constexpr uint32_t NUM_BINDINGS = 22;
 
     void create_descriptor_set_layout(VkDevice device);
     void create_pipeline_layout(VkDevice device);

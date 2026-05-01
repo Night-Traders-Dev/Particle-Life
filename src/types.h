@@ -23,6 +23,11 @@ static constexpr uint32_t GRID_SIZE          = GRID_W * GRID_H;
 static constexpr uint32_t CHEM_W             = 320; // Lower resolution than region for performance
 static constexpr uint32_t CHEM_H             = 180;
 
+// Post-processing constants
+static constexpr uint32_t BLOOM_W            = REGION_W / 2; // half-resolution bloom
+static constexpr uint32_t BLOOM_H            = REGION_H / 2;
+static constexpr uint32_t MAX_HALOS          = 256;
+
 // ── Particle behavior flags (bitmask per type, must match shader constants) ──
 
 enum ParticleBehavior : uint32_t {
@@ -41,24 +46,48 @@ enum ParticleBehavior : uint32_t {
 // ── GPU push-constant block (must match GLSL layout exactly) ─────────────────
 
 struct PushConstants {
-    glm::vec2 region_size;        //  0 – 7
-    glm::vec2 camera_origin;      //  8 – 15
-    uint32_t  particle_count;     // 16 – 19
-    uint32_t  particle_types;     // 20 – 23
-    uint32_t  step;               // 24 – 27
-    float     dt;                 // 28 – 31
-    float     camera_zoom;        // 32 – 35
-    float     radius;             // 36 – 39
-    float     dampening;          // 40 – 43
-    float     repulsion_radius;   // 44 – 47
-    float     interaction_radius; // 48 – 51
-    float     density_limit;      // 52 – 55
-    float     metabolism;         // 56 - 59 (energy loss rate)
-    float     infection_rate;     // 60 - 63
-    float     spawn_probability;  // 64 - 67
-    uint32_t  padding_pc;         // 68 - 71
+    glm::vec2 region_size;        //   0 –   7
+    glm::vec2 camera_origin;      //   8 –  15
+    uint32_t  particle_count;     //  16 –  19
+    uint32_t  particle_types;     //  20 –  23
+    uint32_t  step;               //  24 –  27
+    float     dt;                 //  28 –  31
+    float     camera_zoom;        //  32 –  35
+    float     radius;             //  36 –  39
+    float     dampening;          //  40 –  43
+    float     repulsion_radius;   //  44 –  47
+    float     interaction_radius; //  48 –  51
+    float     density_limit;      //  52 –  55
+    float     metabolism;         //  56 –  59
+    float     infection_rate;     //  60 –  63
+    float     spawn_probability;  //  64 –  67
+    uint32_t  halo_count;         //  68 –  71
+    // ── Visual / post-processing ────────────────────────────────────────────
+    float     trail_decay;        //  72 –  75  (1.0 = no trail, 0.85 = strong trail)
+    float     bloom_threshold;    //  76 –  79
+    float     bloom_intensity;    //  80 –  83
+    float     vignette_strength;  //  84 –  87
+    float     halo_intensity;     //  88 –  91
+    float     time_seconds;       //  92 –  95
+    uint32_t  effect_flags;       //  96 –  99  bit0=trails, bit1=bloom, bit2=vignette, bit3=halos
+    uint32_t  padding_pc;         // 100 – 103
 };
-static_assert(sizeof(PushConstants) == 72, "PushConstants layout mismatch");
+static_assert(sizeof(PushConstants) == 104, "PushConstants layout mismatch");
+
+// Effect flag bits (must match shader)
+static constexpr uint32_t EFFECT_TRAILS   = 1u << 0;
+static constexpr uint32_t EFFECT_BLOOM    = 1u << 1;
+static constexpr uint32_t EFFECT_VIGNETTE = 1u << 2;
+static constexpr uint32_t EFFECT_HALOS    = 1u << 3;
+
+// ── Organism halo (uploaded each frame, std430-aligned) ──────────────────────
+
+struct OrganismHaloGPU {
+    glm::vec2 centroid;     //  0 –  7
+    float     radius;       //  8 – 11
+    uint32_t  dominant_type;// 12 – 15
+};
+static_assert(sizeof(OrganismHaloGPU) == 16, "OrganismHaloGPU layout mismatch");
 
 // ── Conversion Matrix entry ──────────────────────────────────────────────────
 
@@ -95,6 +124,17 @@ struct SimConfig {
     glm::vec2 camera_origin      = { REGION_W / 2.0f, REGION_H / 2.0f };
     float     camera_zoom        = 1.0f;
     float     current_camera_zoom = 1.0f;
+
+    // Visual / post-processing
+    bool  trails_enabled    = true;
+    bool  bloom_enabled     = true;
+    bool  vignette_enabled  = true;
+    bool  halos_enabled     = true;
+    float trail_decay       = 0.90f;  // 1.0 = no trail
+    float bloom_threshold   = 0.7f;
+    float bloom_intensity   = 0.65f;
+    float vignette_strength = 0.35f;
+    float halo_intensity    = 0.45f;
 };
 
 // ── Colour helpers ────────────────────────────────────────────────────────────
