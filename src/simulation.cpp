@@ -48,6 +48,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     // ── Input ──────────────────────────────────────────────────────────────────
     handle_input(window, dt);
 
+
     // ── Upload dynamic GPU data ────────────────────────────────────────────────
     if (is_active)
         compute.upload_dynamic_data(vk, particles);
@@ -75,8 +76,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         VkCommandBuffer compute_cmd = vk.begin_single_command();
 
         float scaled_dt = static_cast<float>(dt) * 5.0f * time_scale_;
-        compute.record(compute_cmd, cfg, scaled_dt, 0, 0.0f);
-
+compute.record(compute_cmd, cfg, scaled_dt, 0, 0.0f);
         vk.end_single_command(compute_cmd);
 
         // Organism detection (every N frames)

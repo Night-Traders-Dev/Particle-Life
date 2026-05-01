@@ -58,8 +58,11 @@ void Particles::gen_particles(const SimConfig& cfg) {
     // Random initial orientations for all particles (used by POLAR types)
     angles.resize(cfg.particle_count);
     angular_velocities.assign(cfg.particle_count, 0.0f);
-    for (uint32_t i = 0; i < cfg.particle_count; ++i)
+    stats.resize(cfg.particle_count);
+    for (uint32_t i = 0; i < cfg.particle_count; ++i) {
         angles[i] = rand_range_f(0.0f, 6.28318f);
+        stats[i] = ParticleStats{}; // Default init
+    }
 }
 
 void Particles::add_particle(glm::vec2 pos, glm::vec2 vel, uint32_t type) {
@@ -69,6 +72,7 @@ void Particles::add_particle(glm::vec2 pos, glm::vec2 vel, uint32_t type) {
     energy.push_back(1.0f);
     angles.push_back(0.0f);
     angular_velocities.push_back(0.0f);
+    stats.push_back(ParticleStats{});
 }
 
 void Particles::gen_random_force_matrix() {

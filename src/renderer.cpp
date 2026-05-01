@@ -198,6 +198,13 @@ void Renderer::create_quad_pipeline(VulkanContext& ctx,
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
     VkPipelineColorBlendAttachmentState blend_attach{};
+    blend_attach.blendEnable    = VK_TRUE;
+    blend_attach.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blend_attach.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blend_attach.colorBlendOp   = VK_BLEND_OP_ADD;
+    blend_attach.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend_attach.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blend_attach.alphaBlendOp   = VK_BLEND_OP_ADD;
     blend_attach.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                   VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 

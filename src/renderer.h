@@ -78,11 +78,12 @@ private:
     void destroy_framebuffers(VulkanContext& ctx);
 
     void record_command_buffer(VkCommandBuffer cmd,
-                               uint32_t        image_index,
-                               VulkanContext&  ctx,
-                               ComputePipeline& compute,
-                               bool            sim_active,
-                               SimConfig& cfg,
-                               Particles& particles,
-                               OrganismManager& org_manager);
+                                     uint32_t        image_index,
+                                     VulkanContext&  ctx,
+                                     ComputePipeline& compute,
+                                     bool            sim_active,
+                                     SimConfig& cfg,
+                                     Particles& particles,
+                                     OrganismManager& org_manager);
+
 };

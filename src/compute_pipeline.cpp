@@ -6,12 +6,12 @@
 // ── Init / Destroy ────────────────────────────────────────────────────────────
 
 void ComputePipeline::init(VulkanContext& ctx, const std::string& shader_spv_path) {
-    const VkFormat HDR_FMT = VK_FORMAT_R16G16B16A16_SFLOAT;
+    const VkFormat HDR_FMT = VK_FORMAT_R32G32B32A32_SFLOAT;
 
     auto make_storage_img = [&](Image& img, uint32_t w, uint32_t h) {
         img = ctx.create_image(
             w, h, HDR_FMT,
-            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         img.view = ctx.create_image_view(img.handle, HDR_FMT, VK_IMAGE_ASPECT_COLOR_BIT);
         ctx.transition_image_layout(img.handle,
@@ -450,11 +450,10 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     };
     pc.camera_origin      = cfg.camera_origin;
     pc.particle_count     = particle_count;
-    pc.particle_types     = MAX_PARTICLE_TYPES;
+    pc.particle_types     = static_cast<uint32_t>(cfg.particle_types);
     pc.dt                 = dt;
-    pc.camera_zoom        = cfg.current_camera_zoom;
-    pc.radius             = cfg.radius;
-    pc.dampening          = cfg.dampening;
+    pc.halo_count         = halo_count;
+    pc.time_seconds       = time_seconds;
     pc.repulsion_radius   = cfg.repulsion_radius;
     pc.interaction_radius = cfg.interaction_radius;
     pc.density_limit      = cfg.density_limit;
@@ -528,6 +527,18 @@ VkMemoryBarrier mem_barrier{};
         0, 1, &mem_barrier, 0, nullptr, 0, nullptr);
 
     // ── Clear render texture ──────────────────────────────────────────────────
+    // Manual transition to TRANSFER_DST_OPTIMAL
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.image = particle_texture.handle;
+    barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
     VkClearColorValue clear_color{};
     clear_color.float32[0] = 0.0f;
     clear_color.float32[1] = 0.0f;
@@ -536,30 +547,28 @@ VkMemoryBarrier mem_barrier{};
     VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     vkCmdClearColorImage(cmd,
         particle_texture.handle,
-        VK_IMAGE_LAYOUT_GENERAL,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         &clear_color, 1, &range);
 
-    // Barrier: clear → storage image write
-    VkImageMemoryBarrier img_barrier{};
-    img_barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    img_barrier.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
-    img_barrier.dstAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
-    img_barrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
-    img_barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
-    img_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    img_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    img_barrier.image               = particle_texture.handle;
-    img_barrier.subresourceRange    = range;
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &img_barrier);
+    // Transition back to GENERAL for shader access
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     // ── Step 1: render particles to texture ───────────────────────────────────
     pc.step = 1;
     dispatch(cmd, active_set, pc, particle_count);
 
     // Memory barrier: compute image write → fragment shader read
+    VkImageMemoryBarrier img_barrier{};
+    img_barrier.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    img_barrier.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
+    img_barrier.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+    img_barrier.image        = particle_texture.handle;
+    img_barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     img_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     img_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmd,

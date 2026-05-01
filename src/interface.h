@@ -36,14 +36,17 @@ public:
     bool  reset_forces_check     = true;
 
     // Archetype preset selection
-    int preset_selection[MAX_PARTICLE_TYPES] = {};
-    bool symmetry_enabled = false; // NEW
+    int  preset_selection[MAX_PARTICLE_TYPES] = {};
+    bool symmetry_enabled = false;
+    int  hover_particle_index = -1; // NEW
 
     // Initialise with a random seed
-
     void init();
 
+    void draw_hover_popup(const Particles& particles, const OrganismManager& org_manager); // NEW
+
     // Draw all ImGui windows and return updated config.
+
     // Call once per frame BEFORE ImGui::Render().
     // `request_reset` is set to true if the user clicks the Reset button.
     void render_imgui(SimConfig&       cfg,

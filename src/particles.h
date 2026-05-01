@@ -16,6 +16,7 @@ public:
     std::vector<glm::vec2> velocities;
     std::vector<uint32_t>  types;
     std::vector<float>     energy;
+    std::vector<ParticleStats> stats; // NEW: Added particle stats
     std::vector<float>     forces;   // MAX_PARTICLE_TYPES² elements
     std::vector<glm::vec4> colors;   // MAX_PARTICLE_TYPES elements
     ConversionData         conversion_matrix[MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES];

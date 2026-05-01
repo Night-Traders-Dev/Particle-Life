@@ -43,6 +43,15 @@ enum ParticleBehavior : uint32_t {
     BEHAVIOR_NEGATIVE = 1u << 8   // negative charge
 };
 
+// ── Particle stats (CPU-side tracking) ────────────────────────────────────────
+
+struct ParticleStats {
+    uint32_t conversion_count = 0;
+    uint32_t membership_history_count = 0;
+    float    spawn_time = 0.0f;
+    int32_t  current_organism_id = -1;
+};
+
 // ── GPU push-constant block (must match GLSL layout exactly) ─────────────────
 
 struct PushConstants {

@@ -164,8 +164,57 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::TextDisabled("Night-Traders-Dev 2026");
 
     ImGui::End();
+
+    // ── Particle Hover Logic ──────────────────────────────────────────────────
+    if (!ImGui::GetIO().WantCaptureMouse) {
+        ImVec2 mouse_pos = ImGui::GetIO().MousePos;
+        float  min_dist  = 10.0f; // pixel radius
+        int    closest   = -1;
+        
+        // Simple O(N) check
+        for (size_t i = 0; i < particles.positions.size(); ++i) {
+            float dist = glm::distance(particles.positions[i], glm::vec2(mouse_pos.x, mouse_pos.y));
+            if (dist < min_dist) {
+                min_dist = dist;
+                closest = (int)i;
+            }
+        }
+        hover_particle_index = closest;
+        if (closest != -1)
+            draw_hover_popup(particles, org_manager);
+    }
 }
-// ... [rest of file draw_ methods]
+void Interface::draw_hover_popup(const Particles& particles, const OrganismManager& org_manager) {
+    if (hover_particle_index < 0 || hover_particle_index >= (int)particles.positions.size()) return;
+
+    const ParticleStats& stats = particles.stats[hover_particle_index];
+    uint32_t type = particles.types[hover_particle_index];
+
+    ImGui::BeginTooltip();
+    ImGui::Text("Particle Info");
+    ImGui::Separator();
+    ImGui::Text("Type: %u", type);
+    ImGui::Text("Conversions: %u", stats.conversion_count);
+    ImGui::Text("Age: %.1fs", stats.spawn_time);
+
+    if (stats.current_organism_id != -1) {
+        ImGui::Separator();
+        ImGui::Text("Organism ID: %d", stats.current_organism_id);
+        const Organism* org = nullptr;
+        for (const auto& o : org_manager.organisms) {
+            if (o.id == (uint32_t)stats.current_organism_id) {
+                org = &o;
+                break;
+            }
+        }
+        if (org) {
+            ImGui::Text("Size: %u", org->traits.size);
+            ImGui::Text("Dominant: %u", org->traits.dominant_type);
+        }
+    }
+    ImGui::EndTooltip();
+}
+
 
 void Interface::draw_particle_grid(SimConfig& cfg, Particles& particles) {
     uint32_t pt = cfg.particle_types;
