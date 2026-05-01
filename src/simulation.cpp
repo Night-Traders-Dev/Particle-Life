@@ -100,6 +100,12 @@ void Simulation::tick(GLFWwindow* window, double dt) {
 
         // Organism detection (every N frames)
         organism_tick_counter_++;
+        
+        // Update particle ages (CPU-side tracking)
+        for (auto& s : particles.stats) {
+            s.spawn_time += static_cast<float>(dt) * time_scale_;
+        }
+
         if (organism_tick_counter_ % ORGANISM_UPDATE_INTERVAL == 0) {
             readback_positions_.resize(cfg.particle_count);
             readback_velocities_.resize(cfg.particle_count);

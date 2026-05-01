@@ -42,7 +42,8 @@ enum ParticleBehavior : uint32_t {
     BEHAVIOR_SHIELD   = 1u << 6,  // resistant to viral and leech
     BEHAVIOR_POSITIVE = 1u << 7,  // positive charge
     BEHAVIOR_NEGATIVE = 1u << 8,   // negative charge
-    BEHAVIOR_FOOD     = 1u << 9    // NEW: Food particle (is eaten by others)
+    BEHAVIOR_FOOD     = 1u << 9,   // NEW: Food particle (is eaten by others)
+    BEHAVIOR_ENERGY_SAVER = 1u << 10 // NEW: Reduced energy consumption
 };
 
 static constexpr uint32_t FOOD_TYPE_INDEX = 9;
@@ -85,8 +86,10 @@ struct PushConstants {
     float     time_seconds;       //  92 –  95
     uint32_t  effect_flags;       //  96 –  99  bit0=trails, bit1=bloom, bit2=vignette, bit3=halos
     float     day_night_factor;   // 100 – 103
+    float     energy_depletion_rates[MAX_PARTICLE_TYPES]; // 104 – 143
+    float     padding_pc[2];      // 144 – 151
 };
-static_assert(sizeof(PushConstants) == 104, "PushConstants layout mismatch");
+static_assert(sizeof(PushConstants) == 152, "PushConstants layout mismatch");
 
 // Effect flag bits (must match shader)
 static constexpr uint32_t EFFECT_TRAILS   = 1u << 0;
@@ -131,11 +134,15 @@ struct SimConfig {
     float infection_rate     = 0.2f;
     float spawn_probability  = 0.001f;
 
+    float energy_depletion_rates[MAX_PARTICLE_TYPES] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+
     // Conversion matrix: [type_a][type_b]
     ConversionData conversion_matrix[MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES];
 
     // Camera state (managed by simulation)
     glm::vec2 camera_origin      = { 0.0f, 0.0f };
+    glm::vec2 camera_target      = { 0.0f, 0.0f };
+    bool      panning_active     = false;
     float     camera_zoom        = 1.0f;
     float     current_camera_zoom = 1.0f;
 

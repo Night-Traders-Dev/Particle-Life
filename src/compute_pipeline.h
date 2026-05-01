@@ -50,6 +50,9 @@ public:
                       const OrganismHaloGPU* halos,
                       uint32_t count);
 
+    void upload_energy_modifiers(VulkanContext& ctx,
+                                 const std::vector<float>& modifiers);
+
     bool is_ready() const { return pos_buffer_a_.handle != VK_NULL_HANDLE; }
 
     // Read current particle positions and velocities back to CPU.
@@ -88,6 +91,7 @@ private:
 
     Buffer energy_buffer_a_{};
     Buffer energy_buffer_b_{};
+    Buffer energy_mod_buffer_{};
 
     // Spatial Grid buffers
     Buffer grid_offsets_buffer_{};
@@ -109,8 +113,8 @@ private:
     // 13: in energy, 14: out energy,
     // 15: grid offsets, 16: sorted indices, 17: conversion matrix,
     // 18: bloom_lo (storage image), 19: bloom_blur (storage image),
-    // 20: composite_tex (storage image), 21: halo buffer
-    static constexpr uint32_t NUM_BINDINGS = 22;
+    // 20: composite_tex (storage image), 21: halo buffer, 22: energy modifiers
+    static constexpr uint32_t NUM_BINDINGS = 23;
 
     void create_descriptor_set_layout(VkDevice device);
     void create_pipeline_layout(VkDevice device);
