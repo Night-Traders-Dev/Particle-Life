@@ -15,6 +15,9 @@ void Particles::gen_data(const SimConfig& cfg) {
     for (float& s : trait_scales) s = 1.0f;
     for (auto& f : behavior_flags) f = BEHAVIOR_NONE;
 
+    // Set food behavior
+    behavior_flags[FOOD_TYPE_INDEX] = BEHAVIOR_FOOD;
+
     gen_empty_conversion_matrix();
 
     if (cfg.reset_forces)
@@ -22,6 +25,18 @@ void Particles::gen_data(const SimConfig& cfg) {
 
     if (cfg.reset_colors)
         gen_default_colors();
+    
+    // Food color: Bright lime green
+    colors[FOOD_TYPE_INDEX] = glm::vec4(0.5f, 1.0f, 0.0f, 1.0f);
+
+    // Make all types slightly attracted to food by default
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+        if (t == FOOD_TYPE_INDEX) {
+            forces[t + t * MAX_PARTICLE_TYPES] = -0.1f; // Food repels itself slightly
+        } else {
+            forces[t + FOOD_TYPE_INDEX * MAX_PARTICLE_TYPES] = 0.5f; // Attraction towards food
+        }
+    }
 
     gen_particles(cfg);
 }
@@ -31,37 +46,35 @@ void Particles::gen_particles(const SimConfig& cfg) {
     velocities.clear();
     types.clear();
     energy.clear();
+    angles.clear();
+    angular_velocities.clear();
+    stats.clear();
 
     const float rw = INFINITE_REGION_SIZE;
     const float rh = INFINITE_REGION_SIZE;
 
-    if (cfg.particle_count == 2) {
-        add_particle(glm::vec2(0.0f, 0.0f),
-                     glm::vec2(0.0f),
-                     rand_range_i(0, (int)cfg.particle_types - 1));
-        add_particle(glm::vec2(60.0f, 0.0f),
-                     glm::vec2(0.0f),
-                     rand_range_i(0, (int)cfg.particle_types - 1));
-        // Init orientation arrays for 2-particle case
-        angles.assign(2, 0.0f);
-        angular_velocities.assign(2, 0.0f);
-        return;
+    // Spawn Food particles first near (0,0)
+    uint32_t food_count = std::max(200u, cfg.particle_count / 20);
+    for (uint32_t i = 0; i < food_count; ++i) {
+        float r = rand_range_f(0.0f, 1000.0f);
+        float a = rand_range_f(0.0f, 6.28318f);
+        glm::vec2 pos(cos(a) * r, sin(a) * r);
+        add_particle(pos, glm::vec2(0.0f), FOOD_TYPE_INDEX);
     }
 
-    for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+    uint32_t remaining = cfg.particle_count > food_count ? cfg.particle_count - food_count : 0;
+
+    for (uint32_t i = 0; i < remaining; ++i) {
         glm::vec2 pos(rand_range_f(-rw/2.0f, rw/2.0f),
                       rand_range_f(-rh/2.0f, rh/2.0f));
         uint32_t t = static_cast<uint32_t>(rand_range_i(0, (int)cfg.particle_types - 1));
+        if (t == FOOD_TYPE_INDEX) t = (t + 1) % cfg.particle_types;
         add_particle(pos, glm::vec2(0.0f), t);
     }
 
     // Random initial orientations for all particles (used by POLAR types)
-    angles.resize(cfg.particle_count);
-    angular_velocities.assign(cfg.particle_count, 0.0f);
-    stats.resize(cfg.particle_count);
-    for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+    for (uint32_t i = 0; i < positions.size(); ++i) {
         angles[i] = rand_range_f(0.0f, 6.28318f);
-        stats[i] = ParticleStats{}; // Default init
     }
 }
 

@@ -41,8 +41,12 @@ enum ParticleBehavior : uint32_t {
     BEHAVIOR_LEECH    = 1u << 5,  // drains energy from neighbors
     BEHAVIOR_SHIELD   = 1u << 6,  // resistant to viral and leech
     BEHAVIOR_POSITIVE = 1u << 7,  // positive charge
-    BEHAVIOR_NEGATIVE = 1u << 8   // negative charge
+    BEHAVIOR_NEGATIVE = 1u << 8,   // negative charge
+    BEHAVIOR_FOOD     = 1u << 9    // NEW: Food particle (is eaten by others)
 };
+
+static constexpr uint32_t FOOD_TYPE_INDEX = 9;
+static constexpr uint32_t NUM_FOOD_SPAWN_POINTS = 5;
 
 // ── Particle stats (CPU-side tracking) ────────────────────────────────────────
 

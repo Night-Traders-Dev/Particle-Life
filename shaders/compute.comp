@@ -1,4 +1,5 @@
 #version 450
+#extension GL_EXT_shader_atomic_float : enable
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
@@ -72,6 +73,7 @@ const uint BEHAVIOR_LEECH    = 32u;
 const uint BEHAVIOR_SHIELD   = 64u;
 const uint BEHAVIOR_POSITIVE = 128u;
 const uint BEHAVIOR_NEGATIVE = 256u;
+const uint BEHAVIOR_FOOD     = 512u;
 
 const uint GRID_CELL_SIZE = 60u;
 const uint GRID_W         = (2560u / GRID_CELL_SIZE) + 2u;
@@ -145,6 +147,7 @@ void apply_physics(uint i) {
     bool is_viral    = (flags_a & BEHAVIOR_VIRAL)    != 0u;
     bool is_leech    = (flags_a & BEHAVIOR_LEECH)    != 0u;
     bool is_shield   = (flags_a & BEHAVIOR_SHIELD)   != 0u;
+    bool is_food     = (flags_a & BEHAVIOR_FOOD)     != 0u;
 
     float angle_a        = is_polar ? angle_in_buffer.data[i] : 0.0f;
     vec2  dipole_a       = is_polar ? vec2(cos(angle_a), sin(angle_a)) : vec2(0.0f);
@@ -222,6 +225,14 @@ void apply_physics(uint i) {
                         }
                     }
 
+                    // Food logic
+                    if (!is_food && (flags_b & BEHAVIOR_FOOD) != 0u) {
+                        if (dist < params.repulsion_radius * 2.0f) {
+                            float drain = 0.5f * params.dt;
+                            energy_gain += drain;
+                            atomicAdd(energy_out_buffer.data[j], -drain);
+                        }
+                    }
                     // Energy drain (Leech)
                     if (is_leech && !((flags_b & BEHAVIOR_SHIELD) != 0u)) {
                         float drain = proximity * 0.1f * params.dt;
@@ -293,16 +304,22 @@ void apply_physics(uint i) {
 
     // CATALYST
     float damp = min(params.dampening + catalyst_boost * 0.04f, 0.99f);
-    vel_a *= damp;
+    if (is_food) {
+        vel_a = vec2(0.0f);
+    } else {
+        vel_a *= damp;
+    }
 
     // Metabolism
-    energy_a -= params.metabolism * params.dt;
+    if (!is_food) {
+        energy_a -= params.metabolism * params.dt;
+    }
     energy_a += energy_gain;
     energy_a = clamp(energy_a, 0.0f, 2.0f);
 
     // Rebirth / Spawning
     bool rebirth = (energy_a <= 0.0f);
-    if (!rebirth && energy_a < 0.2f) {
+    if (!rebirth && energy_a < 0.2f && !is_food) {
         // Slow spontaneous spawning of basic type 0
         if (random(float(i + 13) * params.dt) < params.spawn_probability * params.dt) {
             rebirth = true;
@@ -312,7 +329,13 @@ void apply_physics(uint i) {
 
     if (rebirth) {
         vec2 r = random2(float(i) + pos_a.x * 1.123f + params.dt);
-        pos_a = (r - 0.5f) * params.region_size;
+        if (is_food) {
+            float radius = random(float(i) + params.dt) * 1000.0f;
+            float angle = random(float(i) + params.dt + 0.5f) * 6.28318f;
+            pos_a = vec2(cos(angle), sin(angle)) * radius;
+        } else {
+            pos_a = (r - 0.5f) * params.region_size;
+        }
         vel_a = vec2(0.0f);
         energy_a = 1.0f;
     } else {
