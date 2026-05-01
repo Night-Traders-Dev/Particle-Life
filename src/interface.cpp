@@ -9,7 +9,7 @@
 #include <vector>
 #include "backends/imgui_impl_vulkan.h"
 #include "backends/imgui_impl_glfw.h"
-
+#include "serialization.h"
 
 void Interface::init() {
     std::random_device rd;
@@ -36,15 +36,10 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    if (!settings_visible) {
-        // Settings panel hidden; status bar (added in renderer) and final
-        // ImGui::Render() are emitted by Renderer::record_command_buffer().
-        return;
-    }
+    if (!settings_visible) return;
 
     ImGuiIO& io = ImGui::GetIO();
 
-    // ── Settings panel ────────────────────────────────────────────────────────
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(480, static_cast<float>(io.DisplaySize.y)), ImGuiCond_Always);
     ImGui::Begin("SIMULATION SETTINGS",
@@ -119,12 +114,39 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::SliderFloat("Spawn Probability", &spawn_slider, 0.0f, 0.05f, "%.4f");
     cfg.spawn_probability = spawn_slider;
 
+    ImGui::SliderFloat("Time Scale", &time_scale_slider, 0.0f, 10.0f, "%.1fx");
+
     // ── Glow ──────────────────────────────────────────────────────────────────
     ImGui::Checkbox("Glow Enabled (visual hint only)", &glow_enabled);
+
+    // ── Presets ───────────────────────────────────────────────────────────────
+    ImGui::SeparatorText("Presets");
+    if (ImGui::Button("Save Config")) {
+        Serialization::save_config("config.bin", cfg, particles);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load Config")) {
+        if (Serialization::load_config("config.bin", cfg, particles)) request_reset = true;
+    }
+
+    ImGui::SeparatorText("Snapshots");
+    if (ImGui::Button("Save Snapshot")) {
+        Serialization::save_snapshot("snapshot.bin", particles);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load Snapshot")) {
+        // Implementation TODO: re-upload particle state to GPU
+    }
 
     // ── Particle force / color grid ───────────────────────────────────────────
     ImGui::SeparatorText("Particle Values");
     ImGui::TextDisabled("Hover + scroll: change force | Right-click: zero force");
+    ImGui::Checkbox("Symmetry", &symmetry_enabled);
+    ImGui::SameLine();
+    if (ImGui::Button("Randomize")) {
+        for (uint32_t i = 0; i < MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES; ++i)
+            particles.forces[i] = (static_cast<float>(rand()) / RAND_MAX) * 2.0f - 1.0f;
+    }
     draw_particle_grid(cfg, particles);
 
     // ── Archetype panel ───────────────────────────────────────────────────────
@@ -142,17 +164,11 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::TextDisabled("Night-Traders-Dev 2026");
 
     ImGui::End();
-
-    // ImGui::Render() is invoked once per frame by
-    // Renderer::record_command_buffer() after the status bar is appended.
 }
-
-// ── Particle grid ─────────────────────────────────────────────────────────────
+// ... [rest of file draw_ methods]
 
 void Interface::draw_particle_grid(SimConfig& cfg, Particles& particles) {
     uint32_t pt = cfg.particle_types;
-
-    // Safety – cap at MAX_PARTICLE_TYPES
     if (pt == 0) return;
     if (pt > MAX_PARTICLE_TYPES) pt = MAX_PARTICLE_TYPES;
 
@@ -164,120 +180,76 @@ void Interface::draw_particle_grid(SimConfig& cfg, Particles& particles) {
     for (uint32_t row = 0; row <= pt; ++row) {
         for (uint32_t col = 0; col <= pt; ++col) {
             ImGui::PushID(static_cast<int>(row * (MAX_PARTICLE_TYPES + 1) + col));
-
-            if (row == 0 && col == 0) {
-                // Corner: empty placeholder
-                ImGui::Dummy(ImVec2(cell_size, cell_size));
-            }
+            if (row == 0 && col == 0) ImGui::Dummy(ImVec2(cell_size, cell_size));
             else if (row == 0) {
-                // Top row: color pickers (column headers)
                 uint32_t type_idx = col - 1;
                 glm::vec4& c      = particles.colors[type_idx];
                 float col_arr[4]  = { c.r, c.g, c.b, c.a };
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-                if (ImGui::ColorButton("##col", ImVec4(c.r, c.g, c.b, c.a),
-                                       ImGuiColorEditFlags_NoTooltip,
-                                       ImVec2(cell_size, cell_size)))
-                {
-                    // clicking opens the picker inline below
-                }
-                if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) {
-                    ImGui::OpenPopup("color_pick");
-                }
+                if (ImGui::ColorButton("##col", ImVec4(c.r, c.g, c.b, c.a), ImGuiColorEditFlags_NoTooltip, ImVec2(cell_size, cell_size))) {}
+                if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) ImGui::OpenPopup("color_pick");
                 if (ImGui::BeginPopup("color_pick")) {
-                    if (ImGui::ColorPicker4("##picker", col_arr,
-                                            ImGuiColorEditFlags_NoSidePreview |
-                                            ImGuiColorEditFlags_NoSmallPreview))
-                    {
+                    if (ImGui::ColorPicker4("##picker", col_arr, ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_NoSmallPreview))
                         c = { col_arr[0], col_arr[1], col_arr[2], col_arr[3] };
-                    }
                     ImGui::EndPopup();
                 }
                 ImGui::PopStyleVar();
             }
             else if (col == 0) {
-                // Left column: row color swatch
                 uint32_t type_idx = row - 1;
                 glm::vec4& c      = particles.colors[type_idx];
-                ImGui::ColorButton("##row_col",
-                    ImVec4(c.r, c.g, c.b, c.a),
-                    ImGuiColorEditFlags_NoTooltip,
-                    ImVec2(cell_size, cell_size));
+                ImGui::ColorButton("##row_col", ImVec4(c.r, c.g, c.b, c.a), ImGuiColorEditFlags_NoTooltip, ImVec2(cell_size, cell_size));
             }
             else {
-                // Force matrix cell: type_a = (col-1), type_b = (row-1)
                 uint32_t type_a = col - 1;
                 uint32_t type_b = row - 1;
                 uint32_t fi     = type_a + type_b * MAX_PARTICLE_TYPES;
                 float&   force  = particles.forces[fi];
-
                 ImVec4 fcolor = force_to_color(force);
-
                 ImGui::PushStyleColor(ImGuiCol_Button,        fcolor);
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                    ImVec4(fcolor.x * 1.2f, fcolor.y * 1.2f, fcolor.z * 1.2f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                    ImVec4(fcolor.x * 0.8f, fcolor.y * 0.8f, fcolor.z * 0.8f, 1.0f));
-
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(fcolor.x * 1.2f, fcolor.y * 1.2f, fcolor.z * 1.2f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(fcolor.x * 0.8f, fcolor.y * 0.8f, fcolor.z * 0.8f, 1.0f));
                 char label[16];
                 std::snprintf(label, sizeof(label), "##f%u_%u", type_a, type_b);
                 ImGui::Button(label, ImVec2(cell_size, cell_size));
-
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip("Force: %.2f\nScroll to adjust\nRight-click to zero", force);
-
-                    // Scroll wheel adjusts force
                     float scroll = io.MouseWheel;
                     if (scroll != 0.0f) {
                         force = std::clamp(force + scroll * 0.1f, -1.0f, 1.0f);
+                        if (symmetry_enabled) {
+                            uint32_t sym_fi = type_b + type_a * MAX_PARTICLE_TYPES;
+                            particles.forces[sym_fi] = force;
+                        }
                     }
-                    // Right-click zeros the force
-                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                         force = 0.0f;
+                        if (symmetry_enabled) {
+                            uint32_t sym_fi = type_b + type_a * MAX_PARTICLE_TYPES;
+                            particles.forces[sym_fi] = 0.0f;
+                        }
+                    }
                 }
-
                 ImGui::PopStyleColor(3);
             }
-
             ImGui::PopID();
-
-            // Same-line for all but last column
-            if (col < pt)
-                ImGui::SameLine(0, 0);
+            if (col < pt) ImGui::SameLine(0, 0);
         }
     }
 }
 
-// ── Archetype panel ───────────────────────────────────────────────────────────
-
 void Interface::draw_archetype_panel(Particles& particles, const SimConfig& cfg) {
-    if (!ImGui::CollapsingHeader("Particle Behaviors (Archetypes)"))
-        return;
-
-    static const char* preset_names[] = {
-        "Custom...", "Default", "Repeller", "Polar", "Heavy", "Catalyst", "Membrane", "Viral", "Leech", "Shield",
-        "Proton", "Electron", "Pos Monopole", "Neg Monopole"
-    };
-    static const char* flag_names[] = {
-        "REPEL", "POLAR", "HEAVY", "CATALYST", "VIRAL", "LEECH", "SHIELD", "POSITIVE", "NEGATIVE"
-    };
-
+    if (!ImGui::CollapsingHeader("Particle Behaviors (Archetypes)")) return;
+    static const char* preset_names[] = { "Custom...", "Default", "Repeller", "Polar", "Heavy", "Catalyst", "Membrane", "Viral", "Leech", "Shield", "Proton", "Electron", "Pos Monopole", "Neg Monopole" };
+    static const char* flag_names[] = { "REPEL", "POLAR", "HEAVY", "CATALYST", "VIRAL", "LEECH", "SHIELD", "POSITIVE", "NEGATIVE" };
     uint32_t pt = cfg.particle_types;
     if (pt > MAX_PARTICLE_TYPES) pt = MAX_PARTICLE_TYPES;
-
     ImGui::TextDisabled("Mix behaviors per particle type:");
-
     for (uint32_t t = 0; t < pt; ++t) {
         ImGui::PushID(static_cast<int>(t));
-
         const glm::vec4& c = particles.colors[t];
-        ImGui::ColorButton("##swatch",
-            ImVec4(c.r, c.g, c.b, 1.0f),
-            ImGuiColorEditFlags_NoTooltip,
-            ImVec2(14, 14));
+        ImGui::ColorButton("##swatch", ImVec4(c.r, c.g, c.b, 1.0f), ImGuiColorEditFlags_NoTooltip, ImVec2(14, 14));
         ImGui::SameLine();
-
-        // Preset combo
         ImGui::SetNextItemWidth(120.0f);
         if (ImGui::Combo("##preset", &preset_selection[t], preset_names, 14)) {
             switch (preset_selection[t]) {
@@ -296,8 +268,6 @@ void Interface::draw_archetype_panel(Particles& particles, const SimConfig& cfg)
             case 13: particles.apply_preset_neg_monopole(t);         break;
             }
         }
-
-        // Behavior checkboxes
         uint32_t& flags = particles.behavior_flags[t];
         for (int fi = 0; fi < 9; ++fi) {
             ImGui::SameLine();
@@ -305,33 +275,18 @@ void Interface::draw_archetype_panel(Particles& particles, const SimConfig& cfg)
             if (ImGui::Checkbox(flag_names[fi], &bit)) {
                 if (bit) flags |= (1u << fi);
                 else     flags &= ~(1u << fi);
-                preset_selection[t] = 0; // set to "Custom"
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Toggle %s behavior for this type", flag_names[fi]);
+                preset_selection[t] = 0;
             }
         }
-
         ImGui::PopID();
     }
 }
 
-// ── Organism panel ────────────────────────────────────────────────────────────
-
-void Interface::draw_organism_panel(OrganismManager& org_manager,
-                                     const Particles& particles,
-                                     const SimConfig& cfg)
-{
-    if (!ImGui::CollapsingHeader("Organisms"))
-        return;
-
-    // Cluster radius slider
+void Interface::draw_organism_panel(OrganismManager& org_manager, const Particles& particles, const SimConfig& cfg) {
+    if (!ImGui::CollapsingHeader("Organisms")) return;
     ImGui::SliderFloat("Cluster Radius", &org_manager.cluster_radius, 10.0f, 200.0f, "%.0f");
-
     uint32_t org_count = static_cast<uint32_t>(org_manager.organisms.size());
     ImGui::Text("Active Organisms: %u", org_count);
-
-    // Trait scales bar (per active type)
     uint32_t pt = cfg.particle_types;
     if (pt > MAX_PARTICLE_TYPES) pt = MAX_PARTICLE_TYPES;
     ImGui::TextDisabled("Force Scales (trait feedback):");
@@ -339,37 +294,21 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
         ImGui::PushID(static_cast<int>(t));
         const glm::vec4& c = particles.colors[t];
         ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(c.r, c.g, c.b, 1.0f));
-        char label[32];
-        std::snprintf(label, sizeof(label), "%.2fx##scale%u", particles.trait_scales[t], t);
-        float frac = (particles.trait_scales[t] - 1.0f) / 0.8f; // 1.0–1.8 → 0–1
+        float frac = (particles.trait_scales[t] - 1.0f) / 0.8f;
         ImGui::ProgressBar(frac, ImVec2(-1.0f, 6.0f), "");
         ImGui::SameLine();
         ImGui::Text("%.2fx", particles.trait_scales[t]);
         ImGui::PopStyleColor();
         ImGui::PopID();
     }
-
-    if (org_count == 0) {
-        ImGui::TextDisabled("(no organisms detected yet)");
-        return;
-    }
-
-    // Sort top 8 organisms by size (descending), without modifying the vector
+    if (org_count == 0) return;
     std::vector<const Organism*> sorted;
     sorted.reserve(org_count);
-    for (const auto& o : org_manager.organisms)
-        sorted.push_back(&o);
-    std::sort(sorted.begin(), sorted.end(),
-              [](const Organism* a, const Organism* b) {
-                  return a->traits.size > b->traits.size;
-              });
-
+    for (const auto& o : org_manager.organisms) sorted.push_back(&o);
+    std::sort(sorted.begin(), sorted.end(), [](const Organism* a, const Organism* b) { return a->traits.size > b->traits.size; });
     uint32_t show = std::min(org_count, 8u);
     ImGui::TextDisabled("Top organisms (by size):");
-
-    if (ImGui::BeginTable("orgtable", 6,
-                          ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH))
-    {
+    if (ImGui::BeginTable("orgtable", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
         ImGui::TableSetupColumn("Type",  ImGuiTableColumnFlags_WidthFixed, 28.0f);
         ImGui::TableSetupColumn("Size",  ImGuiTableColumnFlags_WidthFixed, 40.0f);
         ImGui::TableSetupColumn("Speed", ImGuiTableColumnFlags_WidthFixed, 44.0f);
@@ -377,68 +316,34 @@ void Interface::draw_organism_panel(OrganismManager& org_manager,
         ImGui::TableSetupColumn("Kills", ImGuiTableColumnFlags_WidthFixed, 36.0f);
         ImGui::TableSetupColumn("Divs",  ImGuiTableColumnFlags_WidthFixed, 36.0f);
         ImGui::TableHeadersRow();
-
         for (uint32_t i = 0; i < show; ++i) {
             const Organism& o = *sorted[i];
             uint32_t dt = o.traits.dominant_type;
-            const glm::vec4& c = (dt < MAX_PARTICLE_TYPES)
-                                  ? particles.colors[dt]
-                                  : glm::vec4(1.0f);
-
+            const glm::vec4& c = (dt < MAX_PARTICLE_TYPES) ? particles.colors[dt] : glm::vec4(1.0f);
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            ImGui::ColorButton("##tc", ImVec4(c.r, c.g, c.b, 1.0f),
-                               ImGuiColorEditFlags_NoTooltip, ImVec2(16, 14));
-            ImGui::TableSetColumnIndex(1);
-            ImGui::Text("%u", o.traits.size);
-            ImGui::TableSetColumnIndex(2);
-            ImGui::Text("%.1f", o.traits.avg_speed);
-            ImGui::TableSetColumnIndex(3);
-            ImGui::Text("%u", o.traits.generation);
-            ImGui::TableSetColumnIndex(4);
-            ImGui::Text("%u", o.traits.kills);
-            ImGui::TableSetColumnIndex(5);
-            ImGui::Text("%u", o.traits.divisions);
+            ImGui::ColorButton("##tc", ImVec4(c.r, c.g, c.b, 1.0f), ImGuiColorEditFlags_NoTooltip, ImVec2(16, 14));
+            ImGui::TableSetColumnIndex(1); ImGui::Text("%u", o.traits.size);
+            ImGui::TableSetColumnIndex(2); ImGui::Text("%.1f", o.traits.avg_speed);
+            ImGui::TableSetColumnIndex(3); ImGui::Text("%u", o.traits.generation);
+            ImGui::TableSetColumnIndex(4); ImGui::Text("%u", o.traits.kills);
+            ImGui::TableSetColumnIndex(5); ImGui::Text("%u", o.traits.divisions);
         }
         ImGui::EndTable();
     }
 }
 
 void Interface::draw_conversion_panel(Particles& particles, const SimConfig& cfg) {
-    if (!ImGui::CollapsingHeader("Particle Conversions"))
-        return;
-
+    if (!ImGui::CollapsingHeader("Particle Conversions")) return;
     uint32_t pt = cfg.particle_types;
     if (pt > MAX_PARTICLE_TYPES) pt = MAX_PARTICLE_TYPES;
-
-    static int type_a = 0;
-    static int type_b = 0;
-
-    ImGui::Combo("From Type", &type_a, [](void* /*data*/, int idx, const char** out) {
-        static char buf[32];
-        sprintf(buf, "Type %d", idx);
-        *out = buf;
-        return true;
-    }, nullptr, pt);
-
-    ImGui::Combo("To Type", &type_b, [](void* /*data*/, int idx, const char** out) {
-        static char buf[32];
-        sprintf(buf, "Type %d", idx);
-        *out = buf;
-        return true;
-    }, nullptr, pt);
-
+    static int type_a = 0; static int type_b = 0;
+    ImGui::Combo("From Type", &type_a, [](void*, int idx, const char** out) { static char buf[32]; sprintf(buf, "Type %d", idx); *out = buf; return true; }, nullptr, pt);
+    ImGui::Combo("To Type", &type_b, [](void*, int idx, const char** out) { static char buf[32]; sprintf(buf, "Type %d", idx); *out = buf; return true; }, nullptr, pt);
     int idx = type_a + type_b * MAX_PARTICLE_TYPES;
     ConversionData& conv = particles.conversion_matrix[idx];
-
     ImGui::SliderFloat("Probability", &conv.probability, 0.0f, 1.0f, "%.4f");
-    
-    if (ImGui::Button("Set Conversion")) {
-        conv.target_type = type_b;
-    }
+    if (ImGui::Button("Set Conversion")) conv.target_type = type_b;
     ImGui::SameLine();
-    if (ImGui::Button("Clear Conversion")) {
-        conv.target_type = -1;
-        conv.probability = 0.0f;
-    }
+    if (ImGui::Button("Clear Conversion")) { conv.target_type = -1; conv.probability = 0.0f; }
 }

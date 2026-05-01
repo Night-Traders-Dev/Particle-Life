@@ -17,10 +17,18 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
 - Configurable repulsion radius, interaction radius, dampening, and density limiting
 - Double-buffered ping-pong position/velocity buffers for data-race-free updates
 
-### Force Matrix
+### Force Matrix & Grid
 - Up to 10 particle types, each pair with an independent attraction/repulsion scalar
-- Interactive grid: hover + scroll to adjust force, right-click to zero
+- Interactive grid:
+  - Hover + scroll: adjust force
+  - Right-click: zero force
+  - **Symmetry Toggle:** Enforce `Force[A,B] == Force[B,A]`
+  - **Randomize:** Instantly randomize all force values
 - Per-type colour pickers
+
+### Simulation Control
+- **Time Scaling:** Dynamic simulation speed adjustment (0.0x–10.0x)
+- **Persistence:** Save/Load configuration presets and simulation snapshots
 
 ### Particle Archetypes
 Six behaviours selectable per type:

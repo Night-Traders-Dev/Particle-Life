@@ -56,6 +56,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     bool request_reset = false;
     uint32_t prev_count = cfg.particle_count;
     iface.render_imgui(cfg, particles, organism_manager, request_reset);
+    time_scale_ = iface.time_scale_slider;
 
     if (cfg.particle_count != prev_count) {
         particles.gen_data(cfg);
@@ -73,7 +74,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         // Use a temporary one-time command buffer for the compute pass
         VkCommandBuffer compute_cmd = vk.begin_single_command();
 
-        float scaled_dt = static_cast<float>(dt) * 5.0f;
+        float scaled_dt = static_cast<float>(dt) * 5.0f * time_scale_;
         compute.record(compute_cmd, cfg, scaled_dt, 0, 0.0f);
 
         vk.end_single_command(compute_cmd);

@@ -30,14 +30,17 @@ public:
     float metabolism_slider      = 0.15f;
     float infection_slider       = 0.2f;
     float spawn_slider           = 0.001f;
+    float time_scale_slider      = 1.0f; // NEW
     int   seed_value             = 0;
     bool  reset_colors_check     = false;
     bool  reset_forces_check     = true;
 
-    // Per-type preset selection
+    // Archetype preset selection
     int preset_selection[MAX_PARTICLE_TYPES] = {};
+    bool symmetry_enabled = false; // NEW
 
     // Initialise with a random seed
+
     void init();
 
     // Draw all ImGui windows and return updated config.

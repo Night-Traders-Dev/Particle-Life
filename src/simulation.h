@@ -42,6 +42,7 @@ private:
     glm::vec2 mouse_change_        = {};
     glm::vec2 smooth_mouse_change_ = {};
     bool      lmb_down_            = false;
+    float     time_scale_          = 1.0f; // NEW: Added time scaling
 
     // Organism tracking
     int                    organism_tick_counter_ = 0;
