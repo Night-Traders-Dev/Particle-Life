@@ -498,8 +498,6 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd,
 
     vkCmdDraw(cmd, 3, 1, 0, 0); // 3 vertices → fullscreen triangle
 
-    // Single ImGui::Render() per frame: finalises everything
-    // queued in Interface::render_imgui
     ImGui::Render();
 
     // ImGui

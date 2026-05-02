@@ -56,6 +56,8 @@ struct ParticleStats {
     uint32_t membership_history_count = 0;
     float    spawn_time = 0.0f;
     int32_t  current_organism_id = -1;
+    float    min_temp = -10.0f; // New
+    float    max_temp = 50.0f;  // New
 };
 
 // ── GPU push-constant block (must match GLSL layout exactly) ─────────────────

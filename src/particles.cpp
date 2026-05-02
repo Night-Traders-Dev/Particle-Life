@@ -53,22 +53,13 @@ void Particles::gen_particles(const SimConfig& cfg) {
     const float rw = INFINITE_REGION_SIZE;
     const float rh = INFINITE_REGION_SIZE;
 
-    // Spawn Food particles first near (0,0)
-    uint32_t food_count = std::max(200u, cfg.particle_count / 20);
-    for (uint32_t i = 0; i < food_count; ++i) {
-        float r = rand_range_f(0.0f, 1000.0f);
-        float a = rand_range_f(0.0f, 6.28318f);
-        glm::vec2 pos(cos(a) * r, sin(a) * r);
-        add_particle(pos, glm::vec2(0.0f), FOOD_TYPE_INDEX);
-    }
+    // Spawn remaining particles
+    uint32_t count = cfg.particle_count;
 
-    uint32_t remaining = cfg.particle_count > food_count ? cfg.particle_count - food_count : 0;
-
-    for (uint32_t i = 0; i < remaining; ++i) {
+    for (uint32_t i = 0; i < count; ++i) {
         glm::vec2 pos(rand_range_f(-rw/2.0f, rw/2.0f),
                       rand_range_f(-rh/2.0f, rh/2.0f));
         uint32_t t = static_cast<uint32_t>(rand_range_i(0, (int)cfg.particle_types - 1));
-        if (t == FOOD_TYPE_INDEX) t = (t + 1) % cfg.particle_types;
         add_particle(pos, glm::vec2(0.0f), t);
     }
 

@@ -9,7 +9,7 @@
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 static constexpr uint32_t ORGANISM_UPDATE_INTERVAL = 5;  // frames between updates
-static constexpr uint32_t ORGANISM_MIN_SIZE         = 3;  // min particles to form an organism
+static constexpr uint32_t ORGANISM_MIN_SIZE         = 8;  // min particles to form an organism
 
 // ── Traits ───────────────────────────────────────────────────────────────────
 
@@ -33,9 +33,12 @@ struct Organism {
     OrganismTraits traits   = {};
     glm::vec2      centroid = {};
     float          spread   = 0.0f;  // RMS distance of particles from centroid
+    float          membrane_radius = 0.0f; // New: collision boundary
+    float          min_temp = -10.0f; 
+    float          max_temp = 50.0f;  
+    float          structural_integrity = 1.0f;
     std::vector<uint32_t> particle_indices;
 };
-
 // ── OrganismManager ───────────────────────────────────────────────────────────
 
 class OrganismManager {

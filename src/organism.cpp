@@ -138,13 +138,20 @@ void OrganismManager::update(
         org.traits.size = static_cast<uint32_t>(members.size());
 
         glm::vec2 sum_pos(0.0f), sum_vel(0.0f);
+        uint32_t food_count = 0;
         for (uint32_t idx : members) {
             sum_pos += positions[idx];
             sum_vel += velocities[idx];
             uint32_t t = types[idx];
-            if (t < MAX_PARTICLE_TYPES)
+            if (t < MAX_PARTICLE_TYPES) {
                 org.traits.type_counts[t]++;
+                if (t == FOOD_TYPE_INDEX) food_count++;
+            }
         }
+        
+        // Don't count clusters made primarily of food as organisms
+        if (food_count > org.traits.size / 2) continue;
+
 
         float inv = 1.0f / static_cast<float>(members.size());
         org.centroid        = sum_pos * inv;
@@ -213,40 +220,61 @@ void OrganismManager::update(
     float div_r2 = (cluster_radius * 4.0f) * (cluster_radius * 4.0f);
 
     for (size_t pi = 0; pi < prev_organisms_.size(); ++pi) {
-        if (prev_matched[pi]) continue;
-        const auto& prev = prev_organisms_[pi];
-        if (prev.traits.size < ORGANISM_MIN_SIZE * 2) continue;
+    if (prev_matched[pi]) continue;
+    const auto& prev = prev_organisms_[pi];
+    if (prev.traits.size < ORGANISM_MIN_SIZE * 2) continue;
 
-        std::vector<size_t> nearby_new;
-        uint32_t nearby_total = 0;
+    std::vector<size_t> nearby_new;
+    uint32_t nearby_total = 0;
 
-        for (size_t ni = 0; ni < new_orgs.size(); ++ni) {
-            glm::vec2 d = new_orgs[ni].centroid - prev.centroid;
-            if (glm::dot(d, d) < div_r2) {
-                nearby_new.push_back(ni);
-                nearby_total += new_orgs[ni].traits.size;
-            }
+    for (size_t ni = 0; ni < new_orgs.size(); ++ni) {
+        glm::vec2 d = new_orgs[ni].centroid - prev.centroid;
+        if (glm::dot(d, d) < div_r2) {
+            nearby_new.push_back(ni);
+            nearby_total += new_orgs[ni].traits.size;
         }
+    }
 
-        if (nearby_new.size() >= 2) {
-            int diff = static_cast<int>(nearby_total) - static_cast<int>(prev.traits.size);
-            if (std::abs(diff) < static_cast<int>(prev.traits.size) / 2) {
-                for (size_t ni : nearby_new) {
-                    if (!new_matched[ni]) {
-                        new_orgs[ni].traits.kills     = prev.traits.kills;
-                        new_orgs[ni].traits.divisions = prev.traits.divisions + 1;
-                        new_orgs[ni].traits.generation= prev.traits.generation + 1;
-                        new_orgs[ni].traits.parent_id = prev.id;
-                        new_matched[ni] = true;
-                    } else {
-                        new_orgs[ni].traits.divisions++;
-                    }
+    if (nearby_new.size() >= 2) {
+        int diff = static_cast<int>(nearby_total) - static_cast<int>(prev.traits.size);
+        if (std::abs(diff) < static_cast<int>(prev.traits.size) / 2) {
+            for (size_t ni : nearby_new) {
+                if (!new_matched[ni]) {
+                    // Clone traits instead of splitting
+                    new_orgs[ni].traits = prev.traits;
+                    new_orgs[ni].traits.divisions++;
+                    new_orgs[ni].traits.generation++;
+                    new_orgs[ni].traits.parent_id = prev.id;
+                    new_matched[ni] = true;
                 }
             }
         }
     }
+    }
 
-    // ── 5. Consumption detection ──────────────────────────────────────────────
+    // ── Apply temp mortality, integrity and derive limits ──────────────────────
+    for (auto& org : new_orgs) {
+        float base_min = -10.0f;
+        float base_max = 50.0f;
+
+        // Size and dominant type influence limits and structural integrity
+        float size_mod = (float)org.traits.size * 0.1f;
+        float type_mod = (float)org.traits.dominant_type * 2.0f;
+
+        org.min_temp = base_min - size_mod;
+        org.max_temp = base_max + size_mod + type_mod;
+
+        // Integrity based on size/complexity (harder to break if larger)
+        org.structural_integrity = 0.5f + (std::min((float)org.traits.size, 50.0f) * 0.05f);
+
+        // Membrane radius: define a collision boundary based on spread
+        org.membrane_radius = org.spread * 1.8f;
+
+        // Apply to particles
+        for(uint32_t idx : org.particle_indices) {
+            particles.stats[idx].min_temp = org.min_temp;
+            particles.stats[idx].max_temp = org.max_temp;
+        }    }    // ── 5. Consumption detection ──────────────────────────────────────────────
     float kill_r2 = (cluster_radius * 3.0f) * (cluster_radius * 3.0f);
 
     for (size_t ni = 0; ni < new_orgs.size(); ++ni) {

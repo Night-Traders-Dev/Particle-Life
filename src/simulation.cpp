@@ -79,7 +79,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     time_scale_ = iface.time_scale_slider;
 
     if (cfg.particle_count != prev_count) {
-        particles.gen_data(cfg);
+        // Only resize when particle count changes, don't re-gen full data
         compute.resize_buffers(vk, particles);
         organism_tick_counter_ = 0;
     }
@@ -101,9 +101,80 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         // Organism detection (every N frames)
         organism_tick_counter_++;
         
-        // Update particle ages (CPU-side tracking)
-        for (auto& s : particles.stats) {
+        // Procedural food spawning
+        if (organism_tick_counter_ % 600 == 0) {
+            std::mt19937 rng(std::random_device{}());
+            // Spawn within the current camera view
+            float view_w = (float)REGION_W / cfg.current_camera_zoom;
+            float view_h = (float)REGION_H / cfg.current_camera_zoom;
+            std::uniform_real_distribution<float> dist_x(cfg.camera_origin.x - view_w/2.0f, cfg.camera_origin.x + view_w/2.0f);
+            std::uniform_real_distribution<float> dist_y(cfg.camera_origin.y - view_h/2.0f, cfg.camera_origin.y + view_h/2.0f);
+            
+            // Random clump location
+            float cx = dist_x(rng);
+            float cy = dist_y(rng);
+            std::uniform_real_distribution<float> clump_dist(-50.0f, 50.0f);
+            
+            // Sync current state to CPU before modifying
+            const uint32_t n = cfg.particle_count;
+            compute.read_current_state(vk, particles.positions, particles.velocities, particles.types);
+            // Sync energy/angles/angular_velocities/stats if needed? 
+            // Currently they are kept in sync by add_particle and resize calls.
+            
+            int food_to_spawn = 100;
+            int extra_particles = (int)(cfg.particle_count * 0.10f);
+            uint32_t new_total = n + food_to_spawn + extra_particles;
+            
+            particles.positions.resize(new_total);
+            particles.velocities.resize(new_total);
+            particles.types.resize(new_total);
+            particles.energy.resize(new_total, 1.0f);
+            particles.angles.resize(new_total, 0.0f);
+            particles.angular_velocities.resize(new_total, 0.0f);
+            particles.stats.resize(new_total);
+            
+            // Spawn 100 food particles in a clump
+            for(int i=0; i<food_to_spawn; ++i) {
+                int idx = n + i;
+                particles.positions[idx] = glm::vec2(cx + clump_dist(rng), cy + clump_dist(rng));
+                particles.velocities[idx] = glm::vec2(0.0f);
+                particles.types[idx] = FOOD_TYPE_INDEX;
+                particles.energy[idx] = 1.0f;
+                particles.angles[idx] = 0.0f;
+                particles.angular_velocities[idx] = 0.0f;
+                particles.stats[idx] = ParticleStats{};
+            }
+            
+            // Spawn 10% more non-food particles in view
+            std::uniform_int_distribution<uint32_t> type_dist(0, cfg.particle_types - 1);
+            for(int i=0; i < extra_particles; ++i) {
+                int idx = n + food_to_spawn + i;
+                uint32_t t = type_dist(rng);
+                particles.positions[idx] = glm::vec2(dist_x(rng), dist_y(rng));
+                particles.velocities[idx] = glm::vec2(0.0f);
+                particles.types[idx] = t;
+                particles.energy[idx] = 1.0f;
+                particles.angles[idx] = 0.0f;
+                particles.angular_velocities[idx] = 0.0f;
+                particles.stats[idx] = ParticleStats{};
+            }
+            
+            cfg.particle_count = new_total;
+            compute.resize_buffers(vk, particles);
+        }
+
+        // Update particle ages and apply temperature mortality (CPU-side tracking)
+        float current_temp = 22.5f + 12.5f * std::sin(static_cast<float>(2.0 * 3.1415926535 * ((day_night_time_ / DAY_NIGHT_CYCLE_LENGTH) - 0.125)));
+        for (size_t i = 0; i < particles.stats.size(); ++i) {
+            auto& s = particles.stats[i];
             s.spawn_time += static_cast<float>(dt) * time_scale_;
+            
+            // Check mortality
+            if (current_temp < s.min_temp || current_temp > s.max_temp) {
+                // "Kill" particle by setting energy to 0 and position off-screen
+                particles.energy[i] = 0.0f;
+                particles.positions[i] = glm::vec2(-100000.0f);
+            }
         }
 
         if (organism_tick_counter_ % ORGANISM_UPDATE_INTERVAL == 0) {
@@ -226,6 +297,7 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
         particles.energy.assign(n, 1.0f);
         particles.angles.resize(n, 0.0f);
         particles.angular_velocities.resize(n, 0.0f);
+        particles.stats.resize(n, ParticleStats{});
 
         // Append the new particle and rebuild GPU buffers.
         particles.add_particle(world_pos, glm::vec2(0.0f), 0);
