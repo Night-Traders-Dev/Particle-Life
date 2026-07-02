@@ -1,4 +1,5 @@
 #include "simulation.h"
+#include "serialization.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -6,6 +7,7 @@
 #include <stdexcept>
 #include <cmath>
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 
 // ── Init / Destroy ────────────────────────────────────────────────────────────
@@ -23,8 +25,15 @@ void Simulation::init(GLFWwindow* window) {
     // Generate first particle set
     reset();
 
-    // Fetch geolocation for weather (non-blocking, popen is fast)
-    fetch_geolocation();
+    // Restore persisted zip code
+    std::strncpy(iface.zip_code_buf, cfg.zip_code, sizeof(iface.zip_code_buf) - 1);
+    iface.zip_code_buf[sizeof(iface.zip_code_buf) - 1] = '\0';
+    if (cfg.zip_code[0] != '\0') {
+        resolve_zip_code(cfg.zip_code);
+        geolocation_fetched_ = true;
+    } else {
+        fetch_geolocation();
+    }
     last_weather_fetch_ = std::chrono::steady_clock::now();
 }
 
@@ -68,9 +77,12 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         iface.zip_code_changed = false;
         std::string zip(iface.zip_code_buf);
         if (!zip.empty()) {
+            std::strncpy(cfg.zip_code, zip.c_str(), sizeof(cfg.zip_code) - 1);
+            cfg.zip_code[sizeof(cfg.zip_code) - 1] = '\0';
             resolve_zip_code(zip);
             geolocation_fetched_ = true;
             last_weather_fetch_ = std::chrono::steady_clock::time_point{}; // force immediate fetch
+            Serialization::save_config("config.bin", cfg, particles);
         }
     }
 
