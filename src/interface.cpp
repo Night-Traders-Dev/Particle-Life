@@ -2,6 +2,7 @@
 #include "types.h"
 #include <imgui.h>
 #include <cmath>
+#include <cfloat>
 #include <cstring>
 #include <random>
 #include <algorithm>
@@ -395,7 +396,101 @@ void Interface::draw_metrics_window(SimConfig& cfg, Particles& particles, Organi
             }
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Analytics")) {
+            // ── Ring buffer getter ──────────────────────────────────────────
+            struct RingBufferData { const float* buf; int head; int len; };
+            static auto ring_getter = [](void* data, int idx) -> float {
+                auto* d = (RingBufferData*)data;
+                return d->buf[(d->head + 1 + idx) % d->len];
+            };
+
+            // ── Sample data every 6 frames ──────────────────────────────────
+            ++frame_counter;
+            if (frame_counter >= 6) {
+                frame_counter = 0;
+
+                // Population per type
+                float type_counts[MAX_PARTICLE_TYPES] = {};
+                float total_energy = 0.0f;
+                float total_speed  = 0.0f;
+                size_t n = particles.positions.size();
+                for (size_t i = 0; i < n; ++i) {
+                    if (particles.types[i] < MAX_PARTICLE_TYPES)
+                        type_counts[particles.types[i]] += 1.0f;
+                    total_energy += particles.energy[i];
+                    total_speed  += glm::length(particles.velocities[i]);
+                }
+                for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t)
+                    population_history[t][history_head] = type_counts[t];
+
+                total_energy_history[history_head] = total_energy;
+                avg_speed_history[history_head]    = (n > 0) ? (total_speed / (float)n) : 0.0f;
+                organism_count_history[history_head] = (float)org_manager.organisms.size();
+
+                // Birth / death estimation from particle count delta
+                uint32_t cur = (uint32_t)n;
+                int32_t delta = (int32_t)cur - (int32_t)prev_particle_count;
+                birth_count_history[history_head] = (delta > 0) ? (float)delta : 0.0f;
+                death_count_history[history_head] = (delta < 0) ? (float)(-delta) : 0.0f;
+                prev_particle_count = cur;
+
+                history_head = (history_head + 1) % HISTORY_LEN;
+            }
+
+            float plot_w = ImGui::GetContentRegionAvail().x;
+            float plot_h = 80.0f;
+
+            // ── Population per type ─────────────────────────────────────────
+            ImGui::SeparatorText("Population per Type");
+            for (uint32_t t = 0; t < cfg.particle_types; ++t) {
+                const glm::vec4& c = particles.colors[t];
+                ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(c.r, c.g, c.b, 1.0f));
+                RingBufferData rbd = { population_history[t], history_head, HISTORY_LEN };
+                char label[32];
+                snprintf(label, sizeof(label), "Type %u", t);
+                ImGui::PlotLines(label, ring_getter, &rbd, HISTORY_LEN, 0, nullptr, 0.0f, FLT_MAX, ImVec2(plot_w, plot_h));
+                ImGui::PopStyleColor();
+            }
+
+            // ── Total Energy ────────────────────────────────────────────────
+            ImGui::SeparatorText("Total Energy");
+            {
+                RingBufferData rbd = { total_energy_history, history_head, HISTORY_LEN };
+                ImGui::PlotLines("##energy", ring_getter, &rbd, HISTORY_LEN, 0, nullptr, 0.0f, FLT_MAX, ImVec2(plot_w, plot_h));
+            }
+
+            // ── Average Speed ───────────────────────────────────────────────
+            ImGui::SeparatorText("Average Speed");
+            {
+                RingBufferData rbd = { avg_speed_history, history_head, HISTORY_LEN };
+                ImGui::PlotLines("##speed", ring_getter, &rbd, HISTORY_LEN, 0, nullptr, 0.0f, FLT_MAX, ImVec2(plot_w, plot_h));
+            }
+
+            // ── Organism Count ──────────────────────────────────────────────
+            ImGui::SeparatorText("Organism Count");
+            {
+                RingBufferData rbd = { organism_count_history, history_head, HISTORY_LEN };
+                ImGui::PlotLines("##organisms", ring_getter, &rbd, HISTORY_LEN, 0, nullptr, 0.0f, FLT_MAX, ImVec2(plot_w, plot_h));
+            }
+
+            // ── Births / Deaths ─────────────────────────────────────────────
+            ImGui::SeparatorText("Births / Deaths");
+            {
+                ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                RingBufferData rbd_b = { birth_count_history, history_head, HISTORY_LEN };
+                ImGui::PlotLines("Births", ring_getter, &rbd_b, HISTORY_LEN, 0, nullptr, 0.0f, FLT_MAX, ImVec2(plot_w, plot_h));
+                ImGui::PopStyleColor();
+
+                ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                RingBufferData rbd_d = { death_count_history, history_head, HISTORY_LEN };
+                ImGui::PlotLines("Deaths", ring_getter, &rbd_d, HISTORY_LEN, 0, nullptr, 0.0f, FLT_MAX, ImVec2(plot_w, plot_h));
+                ImGui::PopStyleColor();
+            }
+
+            ImGui::EndTabItem();
+        }
         ImGui::EndTabBar();
     }
     ImGui::End();
 }
+

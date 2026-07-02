@@ -44,6 +44,18 @@ public:
     bool show_metrics_window = false; // NEW
     int  metrics_tab = 0;             // NEW
 
+    // ── Analytics rolling buffers ─────────────────────────────────────────────
+    static constexpr int HISTORY_LEN = 300;
+    int   history_head = 0;
+    float population_history[MAX_PARTICLE_TYPES][300] = {};
+    float total_energy_history[300] = {};
+    float avg_speed_history[300] = {};
+    float organism_count_history[300] = {};
+    float birth_count_history[300] = {};
+    float death_count_history[300] = {};
+    int   frame_counter = 0;
+    uint32_t prev_particle_count = 0;
+
     // Initialise with a random seed
     void init();
 

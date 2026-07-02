@@ -462,7 +462,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     uint32_t particle_count    = static_cast<uint32_t>(cfg.particle_count);
 
     PushConstants pc{};
-    pc.region_size = { 1000000.0f, 1000000.0f };
+    pc.region_size = { static_cast<float>(REGION_W) * 3.0f, static_cast<float>(REGION_H) * 3.0f };
     pc.camera_origin      = cfg.camera_origin;
     pc.particle_count     = particle_count;
     pc.particle_types     = static_cast<uint32_t>(cfg.particle_types);
@@ -488,7 +488,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     pc.infection_rate     = cfg.infection_rate;
     pc.spawn_probability  = cfg.spawn_probability;
     pc.day_night_factor   = day_night_factor;
-    for (int i = 0; i < MAX_PARTICLE_TYPES; ++i) {
+    for (uint32_t i = 0; i < MAX_PARTICLE_TYPES; ++i) {
         pc.energy_depletion_rates[i] = cfg.energy_depletion_rates[i];
     }
     pc.day_night_factor   = day_night_factor;
@@ -591,8 +591,11 @@ VkMemoryBarrier mem_barrier{};
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     // ── Step 1: render particles to texture ───────────────────────────────────
+    // Physics wrote to the output buffer (opposite set). Render must READ those
+    // updated positions, so we use the flipped descriptor set here.
+    VkDescriptorSet render_set = (tick % 2 == 0) ? desc_set_b_ : desc_set_a_;
     pc.step = 1;
-    dispatch(cmd, active_set, pc, particle_count);
+    dispatch(cmd, render_set, pc, particle_count);
 
     // Memory barrier: compute image write → fragment shader read
     VkImageMemoryBarrier img_barrier{};

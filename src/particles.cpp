@@ -50,15 +50,26 @@ void Particles::gen_particles(const SimConfig& cfg) {
     angular_velocities.clear();
     stats.clear();
 
-    const float rw = INFINITE_REGION_SIZE;
-    const float rh = INFINITE_REGION_SIZE;
+    // Spawn across a region 3× the viewport so particles have room to form
+    // natural structures. The camera starts at (0,0) so the centre is always
+    // visible immediately; the world just extends beyond the initial view.
+    const float rw = static_cast<float>(REGION_W) * 3.0f;
+    const float rh = static_cast<float>(REGION_H) * 3.0f;
 
-    // Spawn remaining particles
+    // Half a grid-cell used for jitter — breaks alignment with the 60-unit
+    // spatial-hash grid that causes the lattice/grid artefact at startup.
+    const float jitter = static_cast<float>(GRID_CELL_SIZE) * 0.5f;
+
     uint32_t count = cfg.particle_count;
 
     for (uint32_t i = 0; i < count; ++i) {
-        glm::vec2 pos(rand_range_f(-rw/2.0f, rw/2.0f),
-                      rand_range_f(-rh/2.0f, rh/2.0f));
+        glm::vec2 pos(rand_range_f(-rw / 2.0f, rw / 2.0f),
+                      rand_range_f(-rh / 2.0f, rh / 2.0f));
+        // Sub-cell jitter: nudge each particle by a random offset smaller than
+        // one grid cell so no two particles share the same cell boundary.
+        pos.x += rand_range_f(-jitter, jitter);
+        pos.y += rand_range_f(-jitter, jitter);
+
         uint32_t t = static_cast<uint32_t>(rand_range_i(0, (int)cfg.particle_types - 1));
         add_particle(pos, glm::vec2(0.0f), t);
     }

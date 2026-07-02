@@ -295,6 +295,11 @@ void apply_physics(uint i) {
     // HEAVY: high effective mass
     if (is_heavy) total_force *= 0.25f;
 
+    // Brownian motion (thermal jitter) based on day_night_factor (day = 1.0, night = 0.4)
+    float temp_factor = params.day_night_factor; // warmer during day
+    vec2 thermal_noise = (random2(float(i) + params.time_seconds) - 0.5f) * (15.0f * temp_factor);
+    total_force += thermal_noise;
+
     const float MAX_FORCE = 100.0f;
     float f_sq = dot(total_force, total_force);
     if (f_sq > MAX_FORCE * MAX_FORCE)
@@ -302,23 +307,45 @@ void apply_physics(uint i) {
 
     vel_a += total_force * params.dt;
 
-    // CATALYST
-    float damp = min(params.dampening + catalyst_boost * 0.04f, 0.99f);
+    // CATALYST & Fluid Viscosity Drag
+    float speed = length(vel_a);
+    float density_viscosity = 1.0f + local_density * 0.08f;
+    float base_damp = min(params.dampening + catalyst_boost * 0.04f, 0.99f);
+    float drag = (base_damp - 0.02f * density_viscosity) - (0.005f * speed * params.dt);
+    drag = clamp(drag, 0.4f, 0.99f);
+
     if (is_food) {
         vel_a = vec2(0.0f);
     } else {
-        vel_a *= damp;
+        vel_a *= drag;
     }
 
-    // Metabolism
+    // Metabolism & Natural Decay
     if (!is_food) {
         energy_a -= params.metabolism * params.dt;
+    } else {
+        // Natural decomposition/decay of organic food waste
+        energy_a -= params.metabolism * 0.2f * params.dt;
     }
     energy_a += energy_gain;
     energy_a = clamp(energy_a, 0.0f, 2.0f);
 
-    // Rebirth / Spawning
-    bool rebirth = (energy_a <= 0.0f);
+    // Rebirth / Spawning / Mitosis
+    bool is_currently_food = (type_a == 9u);
+    bool rebirth = false;
+
+    if (energy_a <= 0.0f) {
+        if (!is_currently_food) {
+            // Biological decay: turn into food!
+            type_buffer.data[i] = 9u; // Convert to food
+            energy_a = 0.8f;          // Reset energy as organic waste
+            vel_a = vec2(0.0f);
+        } else {
+            // Food decomposed/eaten: ready for recycling via mitosis/spawning
+            rebirth = true;
+        }
+    }
+
     if (!rebirth && energy_a < 0.2f && !is_food) {
         // Slow spontaneous spawning of basic type 0
         if (random(float(i + 13) * params.dt) < params.spawn_probability * params.dt) {
@@ -328,19 +355,42 @@ void apply_physics(uint i) {
     }
 
     if (rebirth) {
-        vec2 r = random2(float(i) + pos_a.x * 1.123f + params.dt);
-        if (is_food) {
-            float radius = random(float(i) + params.dt) * 1000.0f;
-            float angle = random(float(i) + params.dt + 0.5f) * 6.28318f;
-            pos_a = vec2(cos(angle), sin(angle)) * radius;
-        } else {
-            pos_a = (r - 0.5f) * params.region_size;
+        bool spawned = false;
+        float seed = float(i) + params.time_seconds;
+
+        // Mitosis: scan random particles to find a high-energy parent
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            uint parent_idx = uint(random(seed + float(attempt)) * float(params.particle_count));
+            if (parent_idx != i) {
+                float parent_energy = energy_in_buffer.data[parent_idx];
+                uint parent_type = type_buffer.data[parent_idx];
+                
+                // Parent must be alive, not food, and have sufficient energy
+                if (parent_energy > 1.5f && parent_type != 9u) {
+                    vec2 parent_pos = in_pos_buffer.data[parent_idx];
+                    vec2 offset = (random2(seed) - 0.5f) * params.radius * 4.0f;
+                    pos_a = parent_pos + offset;
+                    vel_a = in_vel_buffer.data[parent_idx] * 0.5f; // inherit momentum
+                    type_buffer.data[i] = parent_type;
+                    energy_a = 1.0f; // start with baseline energy
+                    spawned = true;
+                    break;
+                }
+            }
         }
-        vel_a = vec2(0.0f);
-        energy_a = 1.0f;
+
+        if (!spawned) {
+            // Fallback: Abiogenesis (spontaneous spawn in the world)
+            vec2 r = random2(seed);
+            pos_a = (r - 0.5f) * params.region_size;
+            vel_a = vec2(0.0f);
+            energy_a = 1.0f;
+            type_buffer.data[i] = uint(random(seed + 1.23f) * float(params.particle_types));
+        }
     } else {
         pos_a += vel_a * params.dt;
     }
+
 
     out_pos_buffer.data[i] = pos_a;
     out_vel_buffer.data[i] = vel_a;
@@ -368,7 +418,15 @@ void render_particle(uint i) {
     bool  polar  = (flags & BEHAVIOR_POLAR) != 0u;
 
     vec2  viewport_center = vec2(1280.0, 720.0);
-    float radius = params.radius * params.camera_zoom * clamp(energy, 0.5f, 1.5f);
+    float energy_scale = mix(0.4f, 1.6f, clamp(energy, 0.0f, 2.0f) * 0.5f);
+    float radius = params.radius * params.camera_zoom * energy_scale;
+
+    bool is_food_particle = (type == 9u);
+    if (is_food_particle) {
+        float pulse = 0.7f + 0.3f * sin(params.time_seconds * 3.0f + float(i) * 0.1f);
+        radius *= pulse;
+    }
+
     int   range  = int(ceil(radius));
     float r      = float(range);
 
@@ -401,6 +459,11 @@ void render_particle(uint i) {
             vec4 col = color_buffer.data[type];
             col.a *= clamp(energy * 2.0f, 0.2f, 1.0f) * alpha;
 
+            if (energy < 0.3f) {
+                float gray = dot(col.rgb, vec3(0.299f, 0.587f, 0.114f));
+                col.rgb = mix(col.rgb, vec3(gray), 0.7f);
+            }
+
             // Charge indicators
             if ((flags & BEHAVIOR_POSITIVE) != 0u) {
                 float d_pos = distance(px_center, center + vec2(radius * 0.4, -radius * 0.4));
@@ -427,6 +490,25 @@ void render_particle(uint i) {
             }
 
             imageStore(out_render_texture, pixel_pos, col);
+        }
+    }
+
+    vec2 vel = in_vel_buffer.data[i];
+    float speed = length(vel);
+    if (!is_food_particle && speed > 0.5f) {
+        vec2 vel_dir = normalize(vel);
+        float tail_len = min(speed * params.camera_zoom * 0.3f, radius * 3.0f);
+        vec2 tail_end = center - vel_dir * tail_len;
+        int steps = int(ceil(tail_len));
+        for (int s = 0; s <= steps; s++) {
+            float t_val = float(s) / max(float(steps), 1.0f);
+            vec2 pt = mix(center, tail_end, t_val);
+            ivec2 px = ivec2(floor(pt));
+            if (px.x >= 0 && px.x < 2560 && px.y >= 0 && px.y < 1440) {
+                vec4 trail_col = color_buffer.data[type];
+                trail_col.a *= (1.0f - t_val) * 0.5f;
+                imageStore(out_render_texture, px, trail_col);
+            }
         }
     }
 }
