@@ -18,19 +18,20 @@ public:
     bool settings_visible = true;
     bool mouse_within     = false; // true when cursor is over the settings panel
     bool glow_enabled     = false;
+    bool autospawn_enabled = false;
 
     // ── Sliders (raw slider values, converted to actual params by render_imgui) ─
     float particle_count_slider  = 150.0f;  // particle_count = pow(value, 2)
-    float particle_types_slider  = 5.0f;
-    float particle_radius_slider = 2.0f;
-    float dampening_slider       = 0.85f;
-    float repulsion_slider       = 20.0f;
-    float interaction_slider     = 60.0f;
-    float density_limit_slider   = 60.0f;
-    float metabolism_slider      = 0.15f;
+    float particle_types_slider  = 6.0f;
+    float particle_radius_slider = 1.5f;
+    float dampening_slider       = 0.5f;
+    float repulsion_slider       = 15.0f;
+    float interaction_slider     = 75.0f;
+    float density_limit_slider   = 80.0f;
+    float metabolism_slider      = 0.2f;
     float infection_slider       = 0.2f;
-    float spawn_slider           = 0.001f;
-    float time_scale_slider      = 1.0f; // NEW
+    float spawn_slider           = 0.003f;
+    float time_scale_slider      = 1.5f;
     int   seed_value             = 0;
     bool  reset_colors_check     = false;
     bool  reset_forces_check     = true;
@@ -43,6 +44,10 @@ public:
 
     bool show_metrics_window = false; // NEW
     int  metrics_tab = 0;             // NEW
+
+    // Zip code for weather
+    char  zip_code_buf[16]   = "";
+    bool  zip_code_changed   = false;
 
     // ── Analytics rolling buffers ─────────────────────────────────────────────
     static constexpr int HISTORY_LEN = 300;
@@ -71,7 +76,8 @@ public:
                       OrganismManager& org_manager,
                       bool&            request_reset,
                       double           day_night_time,
-                      double           cycle_length);
+                      double           cycle_length,
+                      const WeatherData* weather = nullptr);
 
 private:
     void draw_particle_grid(SimConfig& cfg, Particles& particles);

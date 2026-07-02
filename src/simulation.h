@@ -9,6 +9,7 @@
 #include "organism.h"
 #include <GLFW/glfw3.h>
 #include <vector>
+#include <string>
 
 class Simulation;
 // Call once after init() to hook the GLFW scroll callback
@@ -42,9 +43,25 @@ private:
     glm::vec2 mouse_change_        = {};
     glm::vec2 smooth_mouse_change_ = {};
     bool      lmb_down_            = false;
-    float     time_scale_          = 1.0f; // NEW: Added time scaling
-    double    day_night_time_      = 0.0;  // NEW: Day-night cycle time
-    const double DAY_NIGHT_CYCLE_LENGTH = 1200.0; // 20 minutes in seconds
+    float     time_scale_          = 1.0f;
+    double    day_night_time_      = 0.0;
+    const double DAY_NIGHT_CYCLE_LENGTH = 86400.0; // 24 hours in seconds
+
+    // Weather
+    float     latitude_  = 0.0f;
+    float     longitude_ = 0.0f;
+    std::string location_name_;
+    WeatherData weather_{};
+    std::chrono::steady_clock::time_point last_weather_fetch_;
+    bool      geolocation_fetched_ = false;
+    bool      weather_fetched_     = false;
+
+    void fetch_geolocation();
+    void fetch_weather();
+    void resolve_zip_code(const std::string& zip);
+    bool http_fetch(const std::string& url, std::string& result);
+    float extract_json_float(const std::string& json, const std::string& key);
+    std::string extract_json_string(const std::string& json, const std::string& key);
 
     // Organism tracking
     int                    organism_tick_counter_ = 0;

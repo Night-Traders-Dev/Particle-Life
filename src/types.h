@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <glm/glm.hpp>
+#include <chrono>
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -89,7 +90,8 @@ struct PushConstants {
     uint32_t  effect_flags;       //  96 –  99  bit0=trails, bit1=bloom, bit2=vignette, bit3=halos
     float     day_night_factor;   // 100 – 103
     float     energy_depletion_rates[MAX_PARTICLE_TYPES]; // 104 – 143
-    float     padding_pc[2];      // 144 – 151
+    float     wind_x;              // 144 – 147
+    float     wind_y;              // 148 – 151
 };
 static_assert(sizeof(PushConstants) == 152, "PushConstants layout mismatch");
 
@@ -107,6 +109,19 @@ struct OrganismHaloGPU {
     uint32_t  dominant_type;// 12 – 15
 };
 static_assert(sizeof(OrganismHaloGPU) == 16, "OrganismHaloGPU layout mismatch");
+
+// ── Weather data ──────────────────────────────────────────────────────────────
+
+struct WeatherData {
+    float temperature_c   = 20.0f;
+    float cloud_cover_pct = 0.0f;
+    float wind_speed_kmh  = 0.0f;
+    float wind_dir_deg    = 0.0f;
+    int   weather_code    = 0;
+    bool  valid           = false;
+    std::string location_name;
+    std::chrono::steady_clock::time_point fetch_time;
+};
 
 // ── Conversion Matrix entry ──────────────────────────────────────────────────
 
@@ -127,14 +142,14 @@ struct SimConfig {
     uint32_t generation_seed    = 0;
 
     // Physics / rendering (real-time sliders)
-    float radius             = 2.0f;
-    float dampening          = 0.85f;
-    float repulsion_radius   = 20.0f;
-    float interaction_radius = 60.0f;
-    float density_limit      = 60.0f;
-    float metabolism         = 0.15f;
+    float radius             = 1.5f;
+    float dampening          = 0.5f;
+    float repulsion_radius   = 15.0f;
+    float interaction_radius = 75.0f;
+    float density_limit      = 80.0f;
+    float metabolism         = 0.2f;
     float infection_rate     = 0.2f;
-    float spawn_probability  = 0.001f;
+    float spawn_probability  = 0.003f;
 
     float energy_depletion_rates[MAX_PARTICLE_TYPES] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
 

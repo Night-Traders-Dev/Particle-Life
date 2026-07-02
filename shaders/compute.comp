@@ -61,6 +61,9 @@ layout(push_constant, std430) uniform Params {
     float time_seconds;       //  92
     uint  effect_flags;       //  96
     float day_night_factor;   // 100
+    float energy_depletion_rates[10]; // 104 – 143
+    float wind_x;             // 144
+    float wind_y;             // 148
 } params;
 
 // Behavior flag constants (must match ParticleBehavior enum in types.h)
@@ -299,6 +302,10 @@ void apply_physics(uint i) {
     float temp_factor = params.day_night_factor; // warmer during day
     vec2 thermal_noise = (random2(float(i) + params.time_seconds) - 0.5f) * (15.0f * temp_factor);
     total_force += thermal_noise;
+
+    // Wind (global directional force)
+    vec2 wind_force = vec2(params.wind_x, params.wind_y);
+    total_force += wind_force;
 
     const float MAX_FORCE = 100.0f;
     float f_sq = dot(total_force, total_force);

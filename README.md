@@ -27,10 +27,26 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
 - Double-buffered ping-pong position/velocity buffers for data-race-free updates
 
 ### Day/Night Cycle
-- 20-minute real-time cycle with dawn, day, sunset, and night phases
+- **Real-time 24-hour cycle** — time of day matches your wall clock (6:00 sunrise, 8:00–18:00 day, 18:00 sunset, 20:00 night)
+- Smooth sinusoidal light curve peaks at solar noon, troughs at midnight
 - Temperature fluctuates sinusoidally (10°C–35°C), affecting Brownian motion intensity
+- Cloud cover dims daylight by up to 35%
 - Sky colour transitions smoothly between day and night in the fragment shader
 - Status bar shows current time, phase, and temperature (°C / °F)
+
+### Live Weather
+- **Auto-detects your location** via IP geolocation on startup (ip-api.com, no API key)
+- **Manual ZIP code entry** — type your ZIP in the settings panel and click "Set" to override location
+- **Live conditions** fetched from Open-Meteo API every 10 minutes (free, no API key):
+  - Temperature affects particle mortality
+  - Cloud cover dims the day/night lighting
+  - Wind speed/direction applies a global directional force to all particles
+  - Weather label shown in status bar (Clear / Cloudy / Foggy / Drizzle / Rain / Snow / Storm)
+
+### Global Wind
+- Real-time wind from weather data applied as a uniform directional force on all particles
+- Wind strength and direction update with each weather fetch
+- Particles drift downwind, adding dynamic environmental pressure to the ecosystem
 
 ### Force Matrix & Grid
 - Up to 10 particle types, each pair with an independent attraction/repulsion scalar
@@ -82,9 +98,10 @@ Click the status bar's particle/organism counter to open the **Metrics Explorer*
 - **Interactive Hover:** Hover over any particle to see its type, conversion history, and age
 - **Organism Inspection:** Hover popup shows organism composition and metrics
 - **Simulation Control:**
-  - **Time Scaling:** Dynamic speed adjustment (0.0x–10.0x)
-  - **Persistence:** Save/Load configuration presets
-  - **Force Grid Tools:** Symmetry toggle and instant randomization
+- **Time Scaling:** Dynamic speed adjustment (0.0x–10.0x)
+- **Autospawn Toggle:** Enable/disable periodic food spawning
+- **Persistence:** Save/Load configuration presets
+- **Force Grid Tools:** Symmetry toggle and instant randomization
 
 ---
 

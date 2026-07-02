@@ -27,7 +27,8 @@ void Interface::render_imgui(SimConfig&       cfg,
                               OrganismManager& org_manager,
                               bool&            request_reset,
                               double           day_night_time,
-                              double           cycle_length)
+                              double           cycle_length,
+                              const WeatherData* weather)
 {
     request_reset = false;
 
@@ -52,33 +53,53 @@ void Interface::render_imgui(SimConfig&       cfg,
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
         
         double progress = day_night_time / cycle_length;
-        double total_hours = progress * 24.0 + 6.0;
-        int hours = (int)std::floor(total_hours) % 24;
-        int minutes = (int)std::floor((total_hours - std::floor(total_hours)) * 60.0);
+        int hours = (int)std::floor(day_night_time / 3600.0) % 24;
+        int minutes = (int)std::floor(day_night_time / 60.0) % 60;
         
-        float temp_factor = std::sin(static_cast<float>(2.0 * 3.1415926535 * (progress - 0.125)));
-        float temp_c = 22.5f + 12.5f * temp_factor;
+        float temp_c = 22.5f + 12.5f * std::sin(static_cast<float>(2.0 * 3.1415926535 * (progress - 0.125)));
+        const char* weather_label = "";
+        if (weather && weather->valid) {
+            temp_c = weather->temperature_c;
+            int wc = weather->weather_code;
+            if (wc == 0) weather_label = "Clear";
+            else if (wc <= 3) weather_label = "Cloudy";
+            else if (wc <= 49) weather_label = "Foggy";
+            else if (wc <= 59) weather_label = "Drizzle";
+            else if (wc <= 69) weather_label = "Rain";
+            else if (wc <= 79) weather_label = "Snow";
+            else weather_label = "Storm";
+        }
         float temp_f = temp_c * 1.8f + 32.0f;
         
         const char* day_phase = "DAY";
         ImVec4 phase_col = ImVec4(1.0f, 0.9f, 0.3f, 1.0f);
-
-        if (day_night_time >= 600.0 && day_night_time < 690.0) {
-            day_phase = "SUNSET";
-            phase_col = ImVec4(1.0f, 0.5f, 0.2f, 1.0f);
-        } else if (day_night_time >= 690.0 && day_night_time < 1110.0) {
-            day_phase = "NIGHT";
-            phase_col = ImVec4(0.4f, 0.6f, 1.0f, 1.0f);
-        } else if (day_night_time >= 1110.0) {
+        double hour = day_night_time / 3600.0;
+        if (hour >= 6.0 && hour < 8.0) {
             day_phase = "SUNRISE";
             phase_col = ImVec4(1.0f, 0.7f, 0.4f, 1.0f);
+        } else if (hour >= 8.0 && hour < 18.0) {
+            day_phase = "DAY";
+            phase_col = ImVec4(1.0f, 0.9f, 0.3f, 1.0f);
+        } else if (hour >= 18.0 && hour < 20.0) {
+            day_phase = "SUNSET";
+            phase_col = ImVec4(1.0f, 0.5f, 0.2f, 1.0f);
+        } else {
+            day_phase = "NIGHT";
+            phase_col = ImVec4(0.4f, 0.6f, 1.0f, 1.0f);
         }
 
         ImGui::Text("Time: %02d:%02d | ", hours, minutes);
         ImGui::SameLine();
         ImGui::TextColored(phase_col, "%s", day_phase);
         ImGui::SameLine();
-        ImGui::Text(" | Temp: %.1f°C / %.1f°F", temp_c, temp_f);
+        if (weather && weather->valid) {
+            if (!weather->location_name.empty())
+                ImGui::Text(" | %s - %s | Temp: %.1f°C / %.1f°F", weather_label, weather->location_name.c_str(), temp_c, temp_f);
+            else
+                ImGui::Text(" | %s | Temp: %.1f°C / %.1f°F", weather_label, temp_c, temp_f);
+        } else {
+            ImGui::Text(" | Temp: %.1f°C / %.1f°F", temp_c, temp_f);
+        }
         
         ImGui::SameLine(ImGui::GetWindowWidth() - 240);
         
@@ -149,8 +170,14 @@ void Interface::render_imgui(SimConfig&       cfg,
     cfg.infection_rate = infection_slider;
     ImGui::SliderFloat("Spawn Probability", &spawn_slider, 0.0f, 0.05f, "%.4f");
     cfg.spawn_probability = spawn_slider;
+    ImGui::Checkbox("Autospawn Food", &autospawn_enabled);
     ImGui::SliderFloat("Time Scale", &time_scale_slider, 0.0f, 10.0f, "%.1fx");
     ImGui::Checkbox("Glow Enabled (visual hint only)", &glow_enabled);
+
+    ImGui::SeparatorText("Weather Location");
+    ImGui::InputText("ZIP Code", zip_code_buf, 16);
+    ImGui::SameLine();
+    if (ImGui::Button("Set")) zip_code_changed = true;
 
     ImGui::SeparatorText("Presets");
     if (ImGui::Button("Save Config")) Serialization::save_config("config.bin", cfg, particles);

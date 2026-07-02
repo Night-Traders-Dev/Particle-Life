@@ -454,7 +454,8 @@ void ComputePipeline::record(VkCommandBuffer cmd,
                              float dt,
                              uint32_t halo_count,
                              float time_seconds,
-                             float day_night_factor)
+                             float day_night_factor,
+                             glm::vec2 wind)
 {
     if (pos_buffer_a_.handle == VK_NULL_HANDLE) return;
 
@@ -488,6 +489,8 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     pc.infection_rate     = cfg.infection_rate;
     pc.spawn_probability  = cfg.spawn_probability;
     pc.day_night_factor   = day_night_factor;
+    pc.wind_x             = wind.x;
+    pc.wind_y             = wind.y;
     for (uint32_t i = 0; i < MAX_PARTICLE_TYPES; ++i) {
         pc.energy_depletion_rates[i] = cfg.energy_depletion_rates[i];
     }

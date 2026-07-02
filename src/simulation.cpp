@@ -22,6 +22,10 @@ void Simulation::init(GLFWwindow* window) {
 
     // Generate first particle set
     reset();
+
+    // Fetch geolocation for weather (non-blocking, popen is fast)
+    fetch_geolocation();
+    last_weather_fetch_ = std::chrono::steady_clock::now();
 }
 
 void Simulation::destroy() {
@@ -48,24 +52,40 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     // ── Input ──────────────────────────────────────────────────────────────────
     handle_input(window, dt);
 
-    // Update day-night cycle
-    if (is_active) {
-        day_night_time_ += dt * time_scale_;
-        if (day_night_time_ >= DAY_NIGHT_CYCLE_LENGTH)
-            day_night_time_ -= DAY_NIGHT_CYCLE_LENGTH;
+    // Real-time day/night cycle based on system clock
+    auto now = std::chrono::system_clock::now();
+    auto now_t = std::chrono::system_clock::to_time_t(now);
+    auto* tm = std::localtime(&now_t);
+    day_night_time_ = tm->tm_hour * 3600.0 + tm->tm_min * 60.0 + tm->tm_sec;
+
+    // Smooth sine-based day/night factor: peak at noon (1.0), trough at midnight (~0.3)
+    float t = static_cast<float>(day_night_time_ / DAY_NIGHT_CYCLE_LENGTH);
+    float sin_val = std::sin(static_cast<float>(2.0 * 3.1415926535 * (t - 0.25)));
+    float day_night_factor = 0.65f + 0.35f * sin_val;
+
+    // Check for zip code change from UI
+    if (iface.zip_code_changed) {
+        iface.zip_code_changed = false;
+        std::string zip(iface.zip_code_buf);
+        if (!zip.empty()) {
+            resolve_zip_code(zip);
+            geolocation_fetched_ = true;
+            last_weather_fetch_ = std::chrono::steady_clock::time_point{}; // force immediate fetch
+        }
     }
 
-    float day_night_factor = 1.0f;
-    if (day_night_time_ < 600.0) {
-        day_night_factor = 1.0f;
-    } else if (day_night_time_ < 690.0) {
-        float t = (float)(day_night_time_ - 600.0) / 90.0f;
-        day_night_factor = 1.0f - t * 0.6f; // 1.0 -> 0.4
-    } else if (day_night_time_ < 1110.0) {
-        day_night_factor = 0.4f;
-    } else {
-        float t = (float)(day_night_time_ - 1110.0) / 90.0f;
-        day_night_factor = 0.4f + t * 0.6f; // 0.4 -> 1.0
+    // Weather fetch (every 10 minutes)
+    auto now_steady = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now_steady - last_weather_fetch_).count();
+    if (elapsed > 600) {
+        last_weather_fetch_ = now_steady;
+        fetch_weather();
+    }
+
+    // Apply weather effects
+    if (weather_.valid) {
+        float cloud_dim = 1.0f - weather_.cloud_cover_pct / 100.0f * 0.35f;
+        day_night_factor *= cloud_dim;
     }
 
     // ── Upload dynamic GPU data ────────────────────────────────────────────────
@@ -75,7 +95,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     // ── ImGui ──────────────────────────────────────────────────────────────────
     bool request_reset = false;
     uint32_t prev_count = cfg.particle_count;
-    iface.render_imgui(cfg, particles, organism_manager, request_reset, day_night_time_, DAY_NIGHT_CYCLE_LENGTH);
+    iface.render_imgui(cfg, particles, organism_manager, request_reset, day_night_time_, DAY_NIGHT_CYCLE_LENGTH, &weather_);
     time_scale_ = iface.time_scale_slider;
 
     if (cfg.particle_count != prev_count) {
@@ -95,14 +115,20 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         VkCommandBuffer compute_cmd = vk.begin_single_command();
 
         float scaled_dt = static_cast<float>(dt) * 5.0f * time_scale_ * day_night_factor;
-        compute.record(compute_cmd, cfg, scaled_dt, 0, (float)glfwGetTime(), day_night_factor);
+        glm::vec2 wind_force(0.0f);
+        if (weather_.valid && weather_.wind_speed_kmh > 0.1f) {
+            float wind_rad = glm::radians(weather_.wind_dir_deg);
+            float strength = weather_.wind_speed_kmh * 0.002f;
+            wind_force = glm::vec2(std::cos(wind_rad), std::sin(wind_rad)) * strength;
+        }
+        compute.record(compute_cmd, cfg, scaled_dt, 0, (float)glfwGetTime(), day_night_factor, wind_force);
         vk.end_single_command(compute_cmd);
 
         // Organism detection (every N frames)
         organism_tick_counter_++;
         
         // Procedural food spawning
-        if (organism_tick_counter_ % 600 == 0) {
+        if (iface.autospawn_enabled && organism_tick_counter_ % 600 == 0) {
             std::mt19937 rng(std::random_device{}());
             // Spawn within the current camera view
             float view_w = (float)REGION_W / cfg.current_camera_zoom;
@@ -164,7 +190,12 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         }
 
         // Update particle ages and apply temperature mortality (CPU-side tracking)
-        float current_temp = 22.5f + 12.5f * std::sin(static_cast<float>(2.0 * 3.1415926535 * ((day_night_time_ / DAY_NIGHT_CYCLE_LENGTH) - 0.125)));
+        float current_temp = 22.5f + 12.5f * std::sin(static_cast<float>(2.0 * 3.1415926535 * (t - 0.125)));
+        if (weather_.valid) {
+            // Blend weather temp with diurnal model for smooth transitions
+            float diurnal = 5.0f * std::sin(static_cast<float>(2.0 * 3.1415926535 * (t - 0.125)));
+            current_temp = weather_.temperature_c + diurnal;
+        }
         for (size_t i = 0; i < particles.stats.size(); ++i) {
             auto& s = particles.stats[i];
             s.spawn_time += static_cast<float>(dt) * time_scale_;
@@ -310,6 +341,103 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
     // Ensure right click doesn't trigger anything else (e.g. reset)
     // Right button is handled by the force grid/UI specifically
     // Removed the problematic f2 logic previously attached to mouse button.
+}
+
+// ── Weather HTTP helpers ──────────────────────────────────────────────────────
+
+bool Simulation::http_fetch(const std::string& url, std::string& result) {
+    std::string cmd = "curl -s --max-time 5 \"" + url + "\" 2>/dev/null";
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return false;
+    char buf[4096];
+    while (fgets(buf, sizeof(buf), pipe)) result += buf;
+    int ret = pclose(pipe);
+    return ret == 0 && !result.empty();
+}
+
+float Simulation::extract_json_float(const std::string& json, const std::string& key) {
+    auto pos = json.find("\"" + key + "\"");
+    if (pos == std::string::npos) return 0.0f;
+    pos = json.find(':', pos + key.size() + 2);
+    if (pos == std::string::npos) return 0.0f;
+    pos = json.find_first_not_of(" \t\r\n", pos + 1);
+    if (pos == std::string::npos) return 0.0f;
+    bool quoted = (json[pos] == '"');
+    if (quoted) pos++;
+    auto end = json.find_first_of(quoted ? "\"" : ",}\n\r", pos);
+    if (end == std::string::npos) end = json.size();
+    try { return std::stof(json.substr(pos, end - pos)); }
+    catch (...) { return 0.0f; }
+}
+
+std::string Simulation::extract_json_string(const std::string& json, const std::string& key) {
+    auto pos = json.find("\"" + key + "\"");
+    if (pos == std::string::npos) return "";
+    pos = json.find(':', pos + key.size() + 2);
+    if (pos == std::string::npos) return "";
+    pos = json.find_first_not_of(" \t\r\n", pos + 1);
+    if (pos == std::string::npos || json[pos] != '"') return "";
+    auto end = json.find('"', pos + 1);
+    if (end == std::string::npos) return "";
+    return json.substr(pos + 1, end - pos - 1);
+}
+
+void Simulation::resolve_zip_code(const std::string& zip) {
+    std::string url = "https://geocoding-api.open-meteo.com/v1/search?name=" + zip + "&count=1&language=en&format=json";
+    std::string json;
+    if (!http_fetch(url, json)) return;
+    auto results = json.find("\"results\"");
+    if (results == std::string::npos) return;
+    std::string first = json.substr(results);
+    latitude_ = extract_json_float(first, "latitude");
+    longitude_ = extract_json_float(first, "longitude");
+    location_name_ = extract_json_string(first, "name");
+    if (!location_name_.empty()) {
+        std::string country = extract_json_string(first, "country");
+        if (!country.empty()) location_name_ += ", " + country;
+    }
+    weather_.location_name = location_name_;
+}
+
+void Simulation::fetch_geolocation() {
+    if (geolocation_fetched_) return;
+    std::string json;
+    if (!http_fetch("http://ip-api.com/json/?fields=lat,lon", json)) {
+        // Fallback: moderate US location
+        latitude_ = 40.7128f; longitude_ = -74.0060f;
+        return;
+    }
+    latitude_ = extract_json_float(json, "lat");
+    longitude_ = extract_json_float(json, "lon");
+    geolocation_fetched_ = true;
+}
+
+void Simulation::fetch_weather() {
+    if (!geolocation_fetched_) fetch_geolocation();
+    std::string url = "https://api.open-meteo.com/v1/forecast?"
+        "latitude=" + std::to_string(latitude_) +
+        "&longitude=" + std::to_string(longitude_) +
+        "&current=temperature_2m,weather_code,precipitation,wind_speed_10m,wind_direction_10m,cloud_cover";
+    std::string json;
+    if (!http_fetch(url, json)) {
+        weather_.valid = false;
+        return;
+    }
+    // Navigate to the "current" object
+    auto cur = json.find("\"current\"");
+    if (cur == std::string::npos) { weather_.valid = false; return; }
+    std::string current = json.substr(cur);
+
+    WeatherData w{};
+    w.temperature_c   = extract_json_float(current, "temperature_2m");
+    w.cloud_cover_pct = extract_json_float(current, "cloud_cover");
+    w.wind_speed_kmh  = extract_json_float(current, "wind_speed_10m");
+    w.wind_dir_deg    = extract_json_float(current, "wind_direction_10m");
+    w.weather_code    = static_cast<int>(extract_json_float(current, "weather_code"));
+    w.fetch_time      = std::chrono::steady_clock::now();
+    w.valid           = true;
+    weather_ = w;
+    weather_fetched_ = true;
 }
 
 // ── Scroll callback (called from main.cpp) ────────────────────────────────────

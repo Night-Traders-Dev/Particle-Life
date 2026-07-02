@@ -39,7 +39,8 @@ public:
                 float dt,
                 uint32_t halo_count,
                 float    time_seconds,
-                float    day_night_factor);
+                float    day_night_factor,
+                glm::vec2 wind = glm::vec2(0.0f));
 
     // Upload force + color arrays (called each frame before record())
     void upload_dynamic_data(VulkanContext& ctx,
