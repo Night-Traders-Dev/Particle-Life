@@ -68,6 +68,14 @@ public:
     // Resizes buffers and descriptor sets when particle count changes
     void resize_buffers(VulkanContext& ctx, const Particles& particles);
 
+    // Upload a range of new particle data to existing GPU buffers (within capacity).
+    // start = first index, count = number of particles to upload.
+    void upload_particle_range(VulkanContext& ctx, const Particles& particles,
+                                uint32_t start, uint32_t count);
+
+    // Returns the per-element capacity of GPU buffers
+    uint32_t capacity() const { return buffer_capacity_; }
+
 private:
     VkPipeline            pipeline_             = VK_NULL_HANDLE;
     VkPipelineLayout      pipeline_layout_      = VK_NULL_HANDLE;
@@ -116,6 +124,9 @@ private:
     // Descriptor sets: set_a uses (a→in, b→out), set_b uses (b→in, a→out)
     VkDescriptorSet desc_set_a_ = VK_NULL_HANDLE;
     VkDescriptorSet desc_set_b_ = VK_NULL_HANDLE;
+
+    // Per-element capacity of GPU buffers (may exceed cfg.particle_count)
+    uint32_t buffer_capacity_ = 0;
 
     // Bindings:
     // 0: in pos, 1: in vel, 2: types, 3: forces, 4: colors,

@@ -394,6 +394,13 @@ void VulkanContext::update_buffer(Buffer& buf, const void* data, VkDeviceSize si
     vkUnmapMemory(device, buf.memory);
 }
 
+void VulkanContext::update_buffer_range(Buffer& buf, const void* data, VkDeviceSize offset, VkDeviceSize size) {
+    void* mapped;
+    vkMapMemory(device, buf.memory, offset, size, 0, &mapped);
+    std::memcpy(mapped, data, static_cast<size_t>(size));
+    vkUnmapMemory(device, buf.memory);
+}
+
 void VulkanContext::destroy_buffer(Buffer& buf) {
     if (buf.handle != VK_NULL_HANDLE) vkDestroyBuffer(device, buf.handle, nullptr);
     if (buf.memory != VK_NULL_HANDLE) vkFreeMemory(device, buf.memory, nullptr);

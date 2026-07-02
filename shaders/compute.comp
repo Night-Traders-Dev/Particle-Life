@@ -84,6 +84,8 @@ layout(push_constant, std430) uniform Params {
     float energy_depletion_rates[10]; // 104 – 143
     float wind_x;             // 144
     float wind_y;             // 148
+    uint terrain_obstacle_count; // 152
+    float current_temperature; // 156
 } params;
 
 // Behavior flag constants (must match ParticleBehavior enum in types.h)
@@ -252,22 +254,11 @@ void apply_physics(uint i) {
                     float trait_mod = (type_a == type_b) ? self_mod : cross_mod;
                     attraction *= max(trait_mod, 0.1f);
 
-                    // Sensory FOV: particles only see what's in front of them
-                    // (skip for food, slow particles, and during mitosis checks)
-                    if (speed_a > 0.5f && !is_food && !is_predator) {
-                        vec2 to_b = normalize(delta);
-                        float facing_dot = dot(vel_dir_a, -to_b);
-                        if (facing_dot < -0.3f) {
-                            // Behind the particle — reduce interaction strength
-                            attraction *= 0.3f;
-                        }
-                    }
-
                     // Predator sense: wider awareness
                     if (is_predator) {
                         vec2 to_b = normalize(delta);
                         float facing_dot = dot(vel_dir_a, -to_b);
-                        if (facing_dot < -0.5f) continue; // can't see behind at all when hunting
+                        if (facing_dot < -0.5f) continue;
                     }
                     
                     // Charge logic (additive to force matrix)
@@ -376,6 +367,19 @@ void apply_physics(uint i) {
                     }
 
                     total_force += normal * force * -50.0f;
+
+                    // Hard-sphere collision: prevent particles from overlapping
+                    float sphere_d = params.radius * 2.0f;
+                    if (dist < sphere_d) {
+                        float overlap = sphere_d - dist;
+                        // Position correction (split the overlap equally)
+                        pos_a += normal * overlap * 0.5f;
+                        // Velocity bounce: reflect component along collision normal
+                        float vel_normal = dot(vel_a, normal);
+                        if (vel_normal > 0.0f) {
+                            vel_a -= 2.0f * vel_normal * normal;
+                        }
+                    }
                 }
             }
         }
@@ -384,11 +388,11 @@ void apply_physics(uint i) {
     // HEAVY: high effective mass
     if (is_heavy) total_force *= 0.25f;
 
-    // Terrain obstacle avoidance
-    {
+    // Terrain obstacle avoidance (skip if empty terrain)
+    if (params.terrain_obstacle_count > 0u) {
         // Sample terrain at particle position (map world pos to chem grid)
-        float tx = (pos_a.x / 1000000.0f + 0.5f) * float(CHEM_W);
-        float ty = (pos_a.y / 1000000.0f + 0.5f) * float(CHEM_H);
+        float tx = (pos_a.x / params.region_size.x + 0.5f) * float(CHEM_W);
+        float ty = (pos_a.y / params.region_size.y + 0.5f) * float(CHEM_H);
         uint ux = uint(clamp(floor(tx), 0.0f, float(CHEM_W - 1u)));
         uint uy = uint(clamp(floor(ty), 0.0f, float(CHEM_H - 1u)));
         float obstacle = terrain_grid.data[ux + uy * CHEM_W];
@@ -415,8 +419,8 @@ void apply_physics(uint i) {
 
     // Chemical signal emission (signallers leave a trail)
     if (is_signaler && !is_food) {
-        float tx = (pos_a.x / 1000000.0f + 0.5f) * float(CHEM_W);
-        float ty = (pos_a.y / 1000000.0f + 0.5f) * float(CHEM_H);
+        float tx = (pos_a.x / params.region_size.x + 0.5f) * float(CHEM_W);
+        float ty = (pos_a.y / params.region_size.y + 0.5f) * float(CHEM_H);
         uint ux = uint(clamp(floor(tx), 0.0f, float(CHEM_W - 1u)));
         uint uy = uint(clamp(floor(ty), 0.0f, float(CHEM_H - 1u)));
         uint cell = ux + uy * CHEM_W;
@@ -425,8 +429,8 @@ void apply_physics(uint i) {
 
     // Signal gradient following (all particles are attracted to signals)
     if (!is_food && !is_predator) {
-        float tx = (pos_a.x / 1000000.0f + 0.5f) * float(CHEM_W);
-        float ty = (pos_a.y / 1000000.0f + 0.5f) * float(CHEM_H);
+        float tx = (pos_a.x / params.region_size.x + 0.5f) * float(CHEM_W);
+        float ty = (pos_a.y / params.region_size.y + 0.5f) * float(CHEM_H);
         uint ux = uint(clamp(floor(tx), 0.0f, float(CHEM_W - 1u)));
         uint uy = uint(clamp(floor(ty), 0.0f, float(CHEM_H - 1u)));
         float c = signal_grid.data[ux + uy * CHEM_W];
@@ -434,8 +438,8 @@ void apply_physics(uint i) {
             // Compute gradient via finite differences
             float cx = ux + 1u < CHEM_W ? signal_grid.data[(ux + 1u) + uy * CHEM_W] : c;
             float cy = uy + 1u < CHEM_H ? signal_grid.data[ux + (uy + 1u) * CHEM_W] : c;
-            float gx = (cx - c) * CHEM_W / 1000000.0f;
-            float gy = (cy - c) * CHEM_H / 1000000.0f;
+            float gx = (cx - c) * CHEM_W / params.region_size.x;
+            float gy = (cy - c) * CHEM_H / params.region_size.y;
             vec2 grad = vec2(gx, gy);
             float gl = length(grad);
             if (gl > 0.0001f) {
@@ -546,11 +550,11 @@ void apply_physics(uint i) {
 
                     // Behavior flag mutation: small chance to gain/lose a random flag
                     if (r3 < 0.02f) {
-                        uint flag_bit = 1u << uint(random(seed + 10.0f) * 11.0f);
+                        uint flag_bit = 1u << uint(random(seed + 10.0f) * 9.0f);
                         behavior_buffer.data[parent_type] |= flag_bit;
                     }
                     if (r4 < 0.01f) {
-                        uint flag_bit = 1u << uint(random(seed + 11.0f) * 11.0f);
+                        uint flag_bit = 1u << uint(random(seed + 11.0f) * 9.0f);
                         behavior_buffer.data[parent_type] &= ~flag_bit;
                     }
 
@@ -731,13 +735,8 @@ void render_particle(uint i) {
 
 
 void signal_diffuse(uint i) {
-    // Single-threaded: evaporate and diffuse the signal grid
-    if (gl_GlobalInvocationID.x == 0u) {
-        uint n = CHEM_W * CHEM_H;
-        // Evaporation
-        for (uint j = 0u; j < n; j++) {
-            signal_grid.data[j] *= 0.97f;
-        }
+    if (i < CHEM_W * CHEM_H) {
+        signal_grid.data[i] *= 0.97f;
     }
 }
 

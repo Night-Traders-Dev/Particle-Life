@@ -111,8 +111,10 @@ struct PushConstants {
     float     energy_depletion_rates[MAX_PARTICLE_TYPES]; // 104 – 143
     float     wind_x;              // 144 – 147
     float     wind_y;              // 148 – 151
+    uint32_t  terrain_obstacle_count; // 152 – 155  (0 = skip obstacle checks)
+    float     current_temperature; // 156 – 159
 };
-static_assert(sizeof(PushConstants) == 152, "PushConstants layout mismatch");
+static_assert(sizeof(PushConstants) == 160, "PushConstants layout mismatch");
 
 // Effect flag bits (must match shader)
 static constexpr uint32_t EFFECT_TRAILS   = 1u << 0;
@@ -175,6 +177,12 @@ struct SimConfig {
 
     // Conversion matrix: [type_a][type_b]
     ConversionData conversion_matrix[MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES];
+
+    // Terrain
+    uint32_t terrain_obstacle_count = 0;
+
+    // Weather / environment
+    float current_temperature = 22.0f;
 
     // Camera state (managed by simulation)
     glm::vec2 camera_origin      = { 0.0f, 0.0f };

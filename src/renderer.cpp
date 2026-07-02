@@ -374,7 +374,10 @@ bool Renderer::draw_frame(VulkanContext& ctx,
                           SimConfig& cfg,
                           Particles& particles,
                           OrganismManager& org_manager,
-                          float day_night_factor)
+                          float day_night_factor,
+                          float compute_dt,
+                          float time_seconds,
+                          glm::vec2 wind)
 {
     (void)sim_active;
     FrameData& frame = frames_[current_frame_];
@@ -395,7 +398,7 @@ bool Renderer::draw_frame(VulkanContext& ctx,
     // Record
     VkCommandBuffer cmd = frame.cmd;
     vkResetCommandBuffer(cmd, 0);
-    record_command_buffer(cmd, image_index, ctx, compute, sim_active, cfg, particles, org_manager, day_night_factor);
+    record_command_buffer(cmd, image_index, ctx, compute, sim_active, cfg, particles, org_manager, day_night_factor, compute_dt, time_seconds, wind);
 
     // Submit
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -439,16 +442,18 @@ void Renderer::on_resize(VulkanContext& ctx, GLFWwindow* window) {
 // ── Command buffer recording ──────────────────────────────────────────────────
 
 void Renderer::record_command_buffer(VkCommandBuffer cmd,
-                                     uint32_t        image_index,
-                                     VulkanContext&  ctx,
-                                     ComputePipeline& compute,
-                                     bool            sim_active,
-                                     SimConfig& cfg,
-                                     Particles& particles,
-                                     OrganismManager& org_manager,
-                                     float day_night_factor)
+                                      uint32_t        image_index,
+                                      VulkanContext&  ctx,
+                                      ComputePipeline& compute,
+                                      bool            sim_active,
+                                      SimConfig& cfg,
+                                      Particles& particles,
+                                      OrganismManager& org_manager,
+                                      float           day_night_factor,
+                                      float           compute_dt,
+                                      float           time_seconds,
+                                      glm::vec2       wind)
 {
-    (void)compute;
     (void)sim_active;
     (void)cfg;
     (void)particles;
@@ -457,12 +462,14 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd,
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     VK_CHECK(vkBeginCommandBuffer(cmd, &begin));
 
-    // NOTE: Compute dispatches are submitted separately in Simulation::tick()
-    // via a one-time command buffer (vk.begin_single_command / end_single_command)
-    // before this function is called. The pipeline barrier at the end of
-    // ComputePipeline::record() ensures memory ordering (compute write →
-    // fragment read), and vkQueueWaitIdle in end_single_command provides
-    // full GPU synchronisation before we begin the render pass.
+    // ── Compute dispatches (recorded directly into the render cmd buffer) ─────
+    // This eliminates the GPU idle time between separate compute/render submits.
+    if (sim_active && compute.is_ready()) {
+        compute.record(cmd, cfg, compute_dt, 0, time_seconds, day_night_factor, wind);
+    }
+
+    // NOTE: The barrier at the end of ComputePipeline::record() handles the
+    // compute-write-to-fragment-read transition for particle_texture.
 
     // --- Render pass (fullscreen quad + ImGui) ---
     VkClearValue clear_val{};

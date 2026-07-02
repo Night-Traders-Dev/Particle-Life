@@ -37,7 +37,7 @@ public:
     // Call after swapchain recreation to rebuild framebuffers
     void rebuild_framebuffers(VulkanContext& ctx);
 
-    // Submit a complete frame: compute + fullscreen quad + ImGui
+    // Submit a complete frame: compute dispatches + fullscreen quad + ImGui
     // Returns false if swapchain needs recreation
     bool draw_frame(VulkanContext& ctx,
                     ComputePipeline& compute,
@@ -45,7 +45,10 @@ public:
                     SimConfig& cfg,
                     Particles& particles,
                     OrganismManager& org_manager,
-                    float day_night_factor);
+                    float day_night_factor,
+                    float compute_dt,
+                    float time_seconds,
+                    glm::vec2 wind = glm::vec2(0.0f));
 
     // Called when framebuffer is resized
     void on_resize(VulkanContext& ctx, GLFWwindow* window);
@@ -79,13 +82,16 @@ private:
     void destroy_framebuffers(VulkanContext& ctx);
 
     void record_command_buffer(VkCommandBuffer cmd,
-                                     uint32_t        image_index,
-                                     VulkanContext&  ctx,
-                                     ComputePipeline& compute,
-                                     bool            sim_active,
-                                     SimConfig& cfg,
-                                     Particles& particles,
-                                     OrganismManager& org_manager,
-                                     float day_night_factor);
+                                      uint32_t        image_index,
+                                      VulkanContext&  ctx,
+                                      ComputePipeline& compute,
+                                      bool            sim_active,
+                                      SimConfig& cfg,
+                                      Particles& particles,
+                                      OrganismManager& org_manager,
+                                      float day_night_factor,
+                                      float compute_dt,
+                                      float time_seconds,
+                                      glm::vec2 wind);
 
 };

@@ -122,50 +122,47 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     if (request_reset)
         reset();
 
-    // ── Record compute command buffer ─────────────────────────────────────────
-    // We encode the compute work into a separate one-shot command buffer
-    // that we submit before the render frame so the image is ready.
+    // ── Compute parameters ───────────────────────────────────────────────
     if (is_active && compute.is_ready()) {
-        // Use a temporary one-time command buffer for the compute pass
-        VkCommandBuffer compute_cmd = vk.begin_single_command();
-
-        float scaled_dt = static_cast<float>(dt) * 5.0f * time_scale_ * day_night_factor;
-        glm::vec2 wind_force(0.0f);
-        if (weather_.valid && weather_.wind_speed_kmh > 0.1f) {
-            float wind_rad = glm::radians(weather_.wind_dir_deg);
-            float strength = weather_.wind_speed_kmh * 0.002f;
-            wind_force = glm::vec2(std::cos(wind_rad), std::sin(wind_rad)) * strength;
+        // Compute current temperature for GPU shader
+        float current_temp = 22.5f + 12.5f * std::sin(static_cast<float>(2.0 * 3.1415926535 * (t - 0.125)));
+        if (weather_.valid) {
+            float diurnal = 5.0f * std::sin(static_cast<float>(2.0 * 3.1415926535 * (t - 0.125)));
+            current_temp = weather_.temperature_c + diurnal;
         }
-        compute.record(compute_cmd, cfg, scaled_dt, 0, (float)glfwGetTime(), day_night_factor, wind_force);
-        vk.end_single_command(compute_cmd);
-
-        // Organism detection (every N frames)
+        cfg.current_temperature = current_temp;
         organism_tick_counter_++;
-        
-        // Procedural food spawning
+    }
+
+    // ── Draw frame (compute + render in one command buffer) ──────────────
+    float scaled_dt = static_cast<float>(dt) * 5.0f * time_scale_ * day_night_factor;
+    glm::vec2 wind_force(0.0f);
+    if (weather_.valid && weather_.wind_speed_kmh > 0.1f) {
+        float wind_rad = glm::radians(weather_.wind_dir_deg);
+        float strength = weather_.wind_speed_kmh * 0.002f;
+        wind_force = glm::vec2(std::cos(wind_rad), std::sin(wind_rad)) * strength;
+    }
+    if (renderer.swapchain_dirty)
+        renderer.on_resize(vk, window);
+    renderer.draw_frame(vk, compute, is_active, cfg, particles, organism_manager,
+                         day_night_factor, scaled_dt, (float)glfwGetTime(), wind_force);
+    if (is_active && compute.is_ready()) {
+        // Procedural food spawning (every 600 frames)
         if (iface.autospawn_enabled && organism_tick_counter_ % 600 == 0) {
+            vkQueueWaitIdle(vk.queue);
             std::mt19937 rng(std::random_device{}());
-            // Spawn within the current camera view
             float view_w = (float)REGION_W / cfg.current_camera_zoom;
             float view_h = (float)REGION_H / cfg.current_camera_zoom;
             std::uniform_real_distribution<float> dist_x(cfg.camera_origin.x - view_w/2.0f, cfg.camera_origin.x + view_w/2.0f);
             std::uniform_real_distribution<float> dist_y(cfg.camera_origin.y - view_h/2.0f, cfg.camera_origin.y + view_h/2.0f);
-            
-            // Random clump location
             float cx = dist_x(rng);
             float cy = dist_y(rng);
             std::uniform_real_distribution<float> clump_dist(-50.0f, 50.0f);
-            
-            // Sync current state to CPU before modifying
             const uint32_t n = cfg.particle_count;
             compute.read_current_state(vk, particles.positions, particles.velocities, particles.types);
-            // Sync energy/angles/angular_velocities/stats if needed? 
-            // Currently they are kept in sync by add_particle and resize calls.
-            
             int food_to_spawn = 100;
             int extra_particles = (int)(cfg.particle_count * 0.10f);
             uint32_t new_total = n + food_to_spawn + extra_particles;
-            
             particles.positions.resize(new_total);
             particles.velocities.resize(new_total);
             particles.types.resize(new_total);
@@ -173,9 +170,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
             particles.angles.resize(new_total, 0.0f);
             particles.angular_velocities.resize(new_total, 0.0f);
             particles.stats.resize(new_total);
-            
-            // Spawn 100 food particles in a clump
-            for(int i=0; i<food_to_spawn; ++i) {
+            for (int i = 0; i < food_to_spawn; ++i) {
                 int idx = n + i;
                 particles.positions[idx] = glm::vec2(cx + clump_dist(rng), cy + clump_dist(rng));
                 particles.velocities[idx] = glm::vec2(0.0f);
@@ -185,10 +180,8 @@ void Simulation::tick(GLFWwindow* window, double dt) {
                 particles.angular_velocities[idx] = 0.0f;
                 particles.stats[idx] = ParticleStats{};
             }
-            
-            // Spawn 10% more non-food particles in view
             std::uniform_int_distribution<uint32_t> type_dist(0, cfg.particle_types - 1);
-            for(int i=0; i < extra_particles; ++i) {
+            for (int i = 0; i < extra_particles; ++i) {
                 int idx = n + food_to_spawn + i;
                 uint32_t t = type_dist(rng);
                 particles.positions[idx] = glm::vec2(dist_x(rng), dist_y(rng));
@@ -199,64 +192,29 @@ void Simulation::tick(GLFWwindow* window, double dt) {
                 particles.angular_velocities[idx] = 0.0f;
                 particles.stats[idx] = ParticleStats{};
             }
-            
             cfg.particle_count = new_total;
-            compute.resize_buffers(vk, particles);
+            if (new_total > compute.capacity())
+                compute.resize_buffers(vk, particles);
+            else
+                compute.upload_particle_range(vk, particles, n, food_to_spawn + extra_particles);
         }
 
-        // Update particle ages and apply temperature mortality (CPU-side tracking)
-        float current_temp = 22.5f + 12.5f * std::sin(static_cast<float>(2.0 * 3.1415926535 * (t - 0.125)));
-        if (weather_.valid) {
-            // Blend weather temp with diurnal model for smooth transitions
-            float diurnal = 5.0f * std::sin(static_cast<float>(2.0 * 3.1415926535 * (t - 0.125)));
-            current_temp = weather_.temperature_c + diurnal;
-        }
-        for (size_t i = 0; i < particles.stats.size(); ++i) {
-            auto& s = particles.stats[i];
-            s.spawn_time += static_cast<float>(dt) * time_scale_;
-            
-            // Check mortality
-            if (current_temp < s.min_temp || current_temp > s.max_temp) {
-                // "Kill" particle by setting energy to 0 and position off-screen
-                particles.energy[i] = 0.0f;
-                particles.positions[i] = glm::vec2(-100000.0f);
-            }
-        }
-
-        // Seasonal food spawning (every 1200 frames = ~20s)
+        // Seasonal food spawning (every 1200 frames)
         if (iface.autospawn_enabled && organism_tick_counter_ % 1200 == 0)
             spawn_seasonal_food();
 
-        // Weather disturbance effects
-        if (weather_.valid && weather_.weather_code >= 60) {
-            float storm_intensity = (weather_.weather_code >= 80) ? 2.0f : 1.0f;
-            for (size_t i = 0; i < particles.stats.size(); ++i) {
-                if (particles.types[i] != FOOD_TYPE_INDEX) {
-                    particles.energy[i] -= 0.001f * storm_intensity * static_cast<float>(dt);
-                    if (particles.energy[i] < 0.0f) particles.energy[i] = 0.0f;
-                }
-            }
-        }
-
         // Organism detection (every N frames)
         if (organism_tick_counter_ % ORGANISM_UPDATE_INTERVAL == 0) {
+            vkQueueWaitIdle(vk.queue);
             readback_positions_.resize(cfg.particle_count);
             readback_velocities_.resize(cfg.particle_count);
             readback_types_.resize(cfg.particle_count);
             compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_types_);
-
             particles.types = readback_types_;
-
             organism_manager.update(readback_positions_, readback_velocities_,
                                     particles.types, particles);
         }
     }
-
-    // ── Draw frame (fullscreen quad + ImGui) ──────────────────────────────────
-    if (renderer.swapchain_dirty)
-        renderer.on_resize(vk, window);
-
-    renderer.draw_frame(vk, compute, is_active, cfg, particles, organism_manager, day_night_factor);
 }
 
 // ── Input handling ────────────────────────────────────────────────────────────
@@ -349,6 +307,8 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
         particles.positions.resize(n);
         particles.velocities.resize(n);
         particles.types.resize(n);
+        // Wait for previous frame to finish so GPU buffers are ready for readback
+        vkQueueWaitIdle(vk.queue);
         compute.read_current_state(vk,
                                    particles.positions,
                                    particles.velocities,
@@ -360,11 +320,14 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
         particles.angular_velocities.resize(n, 0.0f);
         particles.stats.resize(n, ParticleStats{});
 
-        // Append the new particle and rebuild GPU buffers.
+        // Append the new particle and update GPU buffers.
         particles.add_particle(world_pos, glm::vec2(0.0f), 0);
         cfg.particle_count++;
         iface.particle_count_slider = std::sqrt(static_cast<float>(cfg.particle_count));
-        compute.resize_buffers(vk, particles);
+        if (cfg.particle_count > compute.capacity())
+            compute.resize_buffers(vk, particles);
+        else
+            compute.upload_particle_range(vk, particles, n, 1);
     }
     lmb_down_prev = lmb_down_curr;
 
@@ -455,6 +418,11 @@ void Simulation::generate_terrain() {
         }
     }
     compute.upload_terrain(vk, grid.data());
+
+    // Count obstacles for shader early-out
+    cfg.terrain_obstacle_count = 0;
+    for (auto v : grid)
+        if (v > 0.1f) cfg.terrain_obstacle_count++;
 }
 
 void Simulation::spawn_seasonal_food() {
@@ -473,6 +441,7 @@ void Simulation::spawn_seasonal_food() {
     std::uniform_real_distribution<float> jitter(-100.0f, 100.0f);
 
     const uint32_t n = cfg.particle_count;
+    vkQueueWaitIdle(vk.queue);
     compute.read_current_state(vk, particles.positions, particles.velocities, particles.types);
     int food_count = 60;
     uint32_t new_total = n + food_count;
@@ -491,7 +460,10 @@ void Simulation::spawn_seasonal_food() {
         particles.energy[idx] = 1.0f;
     }
     cfg.particle_count = new_total;
-    compute.resize_buffers(vk, particles);
+    if (new_total > compute.capacity())
+        compute.resize_buffers(vk, particles);
+    else
+        compute.upload_particle_range(vk, particles, n, food_count);
 }
 
 void Simulation::fetch_geolocation() {

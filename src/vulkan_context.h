@@ -74,6 +74,9 @@ public:
 
     void update_buffer(Buffer& buf, const void* data, VkDeviceSize size);
 
+    // ── Partial buffer write ────────────────────────────────────────────
+    void update_buffer_range(Buffer& buf, const void* data, VkDeviceSize offset, VkDeviceSize size);
+
     void destroy_buffer(Buffer& buf);
 
     // ── Image helpers ─────────────────────────────────────────────────────────

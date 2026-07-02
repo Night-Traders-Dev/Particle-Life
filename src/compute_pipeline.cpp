@@ -150,20 +150,39 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     const VkMemoryPropertyFlags MEM_PROPS =
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
-    VkDeviceSize pos_size      = particles.positions.size()  * sizeof(glm::vec2);
-    VkDeviceSize vel_size      = particles.velocities.size() * sizeof(glm::vec2);
-    VkDeviceSize type_size     = particles.types.size()       * sizeof(uint32_t);
+    // Compute per-element capacity (power of 2, minimum 32768) so small
+    // particle additions don't trigger a full buffer recreation.
+    uint32_t count = static_cast<uint32_t>(particles.positions.size());
+    uint32_t cap = 32768;
+    while (cap < count) cap *= 2;
+    buffer_capacity_ = cap;
+
+    VkDeviceSize elem_capacity = static_cast<VkDeviceSize>(cap);
+    VkDeviceSize pos_size      = elem_capacity * sizeof(glm::vec2);
+    VkDeviceSize vel_size      = elem_capacity * sizeof(glm::vec2);
+    VkDeviceSize type_size     = elem_capacity * sizeof(uint32_t);
+    VkDeviceSize index_size    = elem_capacity * sizeof(uint32_t);
+    VkDeviceSize energy_mod_size = elem_capacity * sizeof(float);
+    VkDeviceSize genome_size     = elem_capacity * sizeof(GenomeData);
+
+    VkDeviceSize actual_count  = static_cast<VkDeviceSize>(count);
+    VkDeviceSize pos_upload    = actual_count * sizeof(glm::vec2);
+    VkDeviceSize vel_upload    = actual_count * sizeof(glm::vec2);
+    VkDeviceSize type_upload   = actual_count * sizeof(uint32_t);
+    VkDeviceSize emod_upload   = actual_count * sizeof(float);
+    VkDeviceSize genome_upload = actual_count * sizeof(GenomeData);
+
     VkDeviceSize force_size    = particles.forces.size()      * sizeof(float);
     VkDeviceSize color_size    = particles.colors.size()      * sizeof(glm::vec4);
     VkDeviceSize behavior_size = MAX_PARTICLE_TYPES            * sizeof(uint32_t);
-    VkDeviceSize angle_size    = particles.angles.size()       * sizeof(float);
-    VkDeviceSize energy_size   = particles.energy.size()       * sizeof(float);
+    VkDeviceSize angle_size    = elem_capacity * sizeof(float);
+    VkDeviceSize energy_size   = elem_capacity * sizeof(float);
+
+    VkDeviceSize angle_upload  = actual_count * sizeof(float);
+    VkDeviceSize energy_upload = actual_count * sizeof(float);
     VkDeviceSize grid_size     = GRID_SIZE                     * sizeof(uint32_t);
-    VkDeviceSize index_size    = particles.positions.size()  * sizeof(uint32_t);
     VkDeviceSize conv_size     = MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES * sizeof(ConversionData);
     VkDeviceSize halo_size     = MAX_HALOS * sizeof(OrganismHaloGPU);
-    VkDeviceSize energy_mod_size = particles.positions.size() * sizeof(float);
-    VkDeviceSize genome_size     = particles.positions.size() * sizeof(GenomeData);
     VkDeviceSize chem_grid_size  = CHEM_W * CHEM_H * sizeof(float);
 
     pos_buffer_a_          = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
@@ -191,41 +210,41 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     signal_grid_buffer_    = ctx.create_buffer(chem_grid_size, BUF_USAGE, MEM_PROPS);
     terrain_grid_buffer_   = ctx.create_buffer(chem_grid_size, BUF_USAGE, MEM_PROPS);
 
-    // Upload initial data
-    ctx.update_buffer(pos_buffer_a_,  particles.positions.data(),        pos_size);
-    ctx.update_buffer(pos_buffer_b_,  particles.positions.data(),        pos_size);
-    ctx.update_buffer(vel_buffer_a_,  particles.velocities.data(),       vel_size);
-    ctx.update_buffer(vel_buffer_b_,  particles.velocities.data(),       vel_size);
-    ctx.update_buffer(type_buffer_,   particles.types.data(),            type_size);
+    // Upload initial data (only the actual count, not the full capacity)
+    ctx.update_buffer(pos_buffer_a_,  particles.positions.data(),        pos_upload);
+    ctx.update_buffer(pos_buffer_b_,  particles.positions.data(),        pos_upload);
+    ctx.update_buffer(vel_buffer_a_,  particles.velocities.data(),       vel_upload);
+    ctx.update_buffer(vel_buffer_b_,  particles.velocities.data(),       vel_upload);
+    ctx.update_buffer(type_buffer_,   particles.types.data(),            type_upload);
     ctx.update_buffer(force_buffer_,  particles.forces.data(),           force_size);
     ctx.update_buffer(color_buffer_,  particles.colors.data(),           color_size);
     ctx.update_buffer(behavior_buffer_, particles.behavior_flags,        behavior_size);
-    ctx.update_buffer(angle_buffer_a_,  particles.angles.data(),         angle_size);
-    ctx.update_buffer(angle_buffer_b_,  particles.angles.data(),         angle_size);
-    ctx.update_buffer(angular_vel_buffer_a_, particles.angular_velocities.data(), angle_size);
-    ctx.update_buffer(angular_vel_buffer_b_, particles.angular_velocities.data(), angle_size);
-    ctx.update_buffer(energy_buffer_a_, particles.energy.data(),         energy_size);
-    ctx.update_buffer(energy_buffer_b_, particles.energy.data(),         energy_size);
+    ctx.update_buffer(angle_buffer_a_,  particles.angles.data(),         angle_upload);
+    ctx.update_buffer(angle_buffer_b_,  particles.angles.data(),         angle_upload);
+    ctx.update_buffer(angular_vel_buffer_a_, particles.angular_velocities.data(), angle_upload);
+    ctx.update_buffer(angular_vel_buffer_b_, particles.angular_velocities.data(), angle_upload);
+    ctx.update_buffer(energy_buffer_a_, particles.energy.data(),         energy_upload);
+    ctx.update_buffer(energy_buffer_b_, particles.energy.data(),         energy_upload);
     ctx.update_buffer(conversion_buffer_, particles.conversion_matrix,   conv_size);
 
-    std::vector<float> energy_mods(particles.positions.size(), 1.0f);
-    ctx.update_buffer(energy_mod_buffer_, energy_mods.data(), energy_mod_size);
+    std::vector<float> energy_mods(static_cast<size_t>(actual_count), 1.0f);
+    ctx.update_buffer(energy_mod_buffer_, energy_mods.data(), emod_upload);
 
     // Halo buffer initialised to zeros (no halos until OrganismManager populates it).
     std::vector<OrganismHaloGPU> empty_halos(MAX_HALOS, OrganismHaloGPU{});
     ctx.update_buffer(halo_buffer_, empty_halos.data(), halo_size);
 
     // Genome buffers (initialised with default values)
-    std::vector<GenomeData> genomes(particles.positions.size());
-    for (size_t i = 0; i < genomes.size(); ++i) {
+    std::vector<GenomeData> genomes(static_cast<size_t>(actual_count));
+    for (size_t i = 0; i < static_cast<size_t>(actual_count); ++i) {
         genomes[i].age       = 0.0f;
         genomes[i].lifespan  = DEFAULT_LIFESPAN;
         genomes[i].self_mod  = 1.0f;
         genomes[i].cross_mod = 1.0f;
         genomes[i].generation = 0u;
     }
-    ctx.update_buffer(genome_buffer_a_, genomes.data(), genome_size);
-    ctx.update_buffer(genome_buffer_b_, genomes.data(), genome_size);
+    ctx.update_buffer(genome_buffer_a_, genomes.data(), genome_upload);
+    ctx.update_buffer(genome_buffer_b_, genomes.data(), genome_upload);
 
     // Signal grid: zeroed
     std::vector<float> zero_chem(CHEM_W * CHEM_H, 0.0f);
@@ -239,6 +258,8 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
 
 void ComputePipeline::clear_buffers(VulkanContext& ctx) {
     vkDeviceWaitIdle(ctx.device);
+
+    buffer_capacity_ = 0;
 
     // Free descriptor sets by resetting the pool
     if (desc_pool_ != VK_NULL_HANDLE) {
@@ -537,7 +558,8 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     for (uint32_t i = 0; i < MAX_PARTICLE_TYPES; ++i) {
         pc.energy_depletion_rates[i] = cfg.energy_depletion_rates[i];
     }
-    pc.day_night_factor   = day_night_factor;
+    pc.terrain_obstacle_count = cfg.terrain_obstacle_count;
+    pc.current_temperature    = cfg.current_temperature;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -589,10 +611,11 @@ vkCmdPipelineBarrier(cmd,
     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
     0, 1, &grid_barrier, 0, nullptr, 0, nullptr);
 
-// 5. Signal diffusion step
+// 5. Signal diffusion step (parallel: each thread handles one cell)
 pc.step = 6;
 vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
-vkCmdDispatch(cmd, 1, 1, 1);
+{   uint32_t chem_groups = (CHEM_W * CHEM_H / GROUP_DENSITY) + 1;
+    vkCmdDispatch(cmd, chem_groups, 1, 1); }
 
 vkCmdPipelineBarrier(cmd,
     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -685,16 +708,58 @@ void ComputePipeline::dispatch(VkCommandBuffer cmd,
 }
 
 void ComputePipeline::resize_buffers(VulkanContext& ctx, const Particles& particles) {
+    uint32_t needed = static_cast<uint32_t>(particles.positions.size());
+    if (needed <= buffer_capacity_) {
+        // Within existing GPU capacity — update particle count only.
+        // New particle data was already written to CPU arrays; the next
+        // compute dispatch reads cfg.particle_count so it's fine.
+        return;
+    }
+
     vkDeviceWaitIdle(ctx.device);
-    
-    // Clear old buffers and descriptor pool
     clear_buffers(ctx);
     if (desc_pool_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(ctx.device, desc_pool_, nullptr);
         desc_pool_ = VK_NULL_HANDLE;
     }
-    
-    // Recreate
     create_descriptor_pool(ctx.device);
     create_buffers(ctx, particles);
+}
+
+void ComputePipeline::upload_particle_range(VulkanContext& ctx, const Particles& particles,
+                                             uint32_t start, uint32_t count) {
+    if (count == 0) return;
+    VkDeviceSize byte_off   = static_cast<VkDeviceSize>(start) * sizeof(glm::vec2);
+    VkDeviceSize byte_cnt   = static_cast<VkDeviceSize>(count) * sizeof(glm::vec2);
+    VkDeviceSize type_off   = static_cast<VkDeviceSize>(start) * sizeof(uint32_t);
+    VkDeviceSize type_cnt   = static_cast<VkDeviceSize>(count) * sizeof(uint32_t);
+    VkDeviceSize flt_off    = static_cast<VkDeviceSize>(start) * sizeof(float);
+    VkDeviceSize flt_cnt    = static_cast<VkDeviceSize>(count) * sizeof(float);
+
+    ctx.update_buffer_range(pos_buffer_a_,  &particles.positions[start],         byte_off, byte_cnt);
+    ctx.update_buffer_range(pos_buffer_b_,  &particles.positions[start],         byte_off, byte_cnt);
+    ctx.update_buffer_range(vel_buffer_a_,  &particles.velocities[start],        byte_off, byte_cnt);
+    ctx.update_buffer_range(vel_buffer_b_,  &particles.velocities[start],        byte_off, byte_cnt);
+    ctx.update_buffer_range(type_buffer_,   &particles.types[start],             type_off, type_cnt);
+    ctx.update_buffer_range(angle_buffer_a_, &particles.angles[start],           flt_off,  flt_cnt);
+    ctx.update_buffer_range(angle_buffer_b_, &particles.angles[start],           flt_off,  flt_cnt);
+    ctx.update_buffer_range(angular_vel_buffer_a_, &particles.angular_velocities[start], flt_off, flt_cnt);
+    ctx.update_buffer_range(angular_vel_buffer_b_, &particles.angular_velocities[start], flt_off, flt_cnt);
+    ctx.update_buffer_range(energy_buffer_a_, &particles.energy[start],          flt_off,  flt_cnt);
+    ctx.update_buffer_range(energy_buffer_b_, &particles.energy[start],          flt_off,  flt_cnt);
+    // Energy modifiers & genomes — initialize to defaults for new particles
+    std::vector<float> new_emods(count, 1.0f);
+    ctx.update_buffer_range(energy_mod_buffer_, new_emods.data(), flt_off, flt_cnt);
+    std::vector<GenomeData> new_genomes(count);
+    for (size_t i = 0; i < new_genomes.size(); ++i) {
+        new_genomes[i].age       = 0.0f;
+        new_genomes[i].lifespan  = DEFAULT_LIFESPAN;
+        new_genomes[i].self_mod  = 1.0f;
+        new_genomes[i].cross_mod = 1.0f;
+        new_genomes[i].generation = 0u;
+    }
+    VkDeviceSize genome_off = static_cast<VkDeviceSize>(start) * sizeof(GenomeData);
+    VkDeviceSize genome_cnt = static_cast<VkDeviceSize>(count) * sizeof(GenomeData);
+    ctx.update_buffer_range(genome_buffer_a_, new_genomes.data(), genome_off, genome_cnt);
+    ctx.update_buffer_range(genome_buffer_b_, new_genomes.data(), genome_off, genome_cnt);
 }
