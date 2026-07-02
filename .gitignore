@@ -73,3 +73,4 @@ Testing/
 
 # ImGui runtime config
 imgui.ini
+config.bin

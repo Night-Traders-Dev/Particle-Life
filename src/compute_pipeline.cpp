@@ -126,11 +126,11 @@ void ComputePipeline::create_compute_pipeline(VulkanContext& ctx,
 // ── Descriptor pool ───────────────────────────────────────────────────────────
 
 void ComputePipeline::create_descriptor_pool(VkDevice device) {
-    // 23 bindings total per set, 2 sets:
-    //   storage buffers: bindings 0-6, 8-17, 21, 22 -> 19 per set
+    // 27 bindings total per set, 2 sets:
+    //   storage buffers: bindings 0-6, 8-17, 21-26 -> 22 per set
     //   storage images : bindings 7, 18, 19, 20  ->  4 per set
     std::array<VkDescriptorPoolSize, 2> pool_sizes{};
-    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 19 * 2 };
+    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 22 * 2 };
     pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,   4 * 2 };
 
     VkDescriptorPoolCreateInfo ci{};
@@ -163,6 +163,8 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     VkDeviceSize conv_size     = MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES * sizeof(ConversionData);
     VkDeviceSize halo_size     = MAX_HALOS * sizeof(OrganismHaloGPU);
     VkDeviceSize energy_mod_size = particles.positions.size() * sizeof(float);
+    VkDeviceSize genome_size     = particles.positions.size() * sizeof(GenomeData);
+    VkDeviceSize chem_grid_size  = CHEM_W * CHEM_H * sizeof(float);
 
     pos_buffer_a_          = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
     pos_buffer_b_          = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
@@ -184,6 +186,10 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     sorted_indices_buffer_ = ctx.create_buffer(index_size,    BUF_USAGE, MEM_PROPS);
     conversion_buffer_     = ctx.create_buffer(conv_size,     BUF_USAGE, MEM_PROPS);
     halo_buffer_           = ctx.create_buffer(halo_size,     BUF_USAGE, MEM_PROPS);
+    genome_buffer_a_       = ctx.create_buffer(genome_size,  BUF_USAGE, MEM_PROPS);
+    genome_buffer_b_       = ctx.create_buffer(genome_size,  BUF_USAGE, MEM_PROPS);
+    signal_grid_buffer_    = ctx.create_buffer(chem_grid_size, BUF_USAGE, MEM_PROPS);
+    terrain_grid_buffer_   = ctx.create_buffer(chem_grid_size, BUF_USAGE, MEM_PROPS);
 
     // Upload initial data
     ctx.update_buffer(pos_buffer_a_,  particles.positions.data(),        pos_size);
@@ -208,6 +214,23 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     // Halo buffer initialised to zeros (no halos until OrganismManager populates it).
     std::vector<OrganismHaloGPU> empty_halos(MAX_HALOS, OrganismHaloGPU{});
     ctx.update_buffer(halo_buffer_, empty_halos.data(), halo_size);
+
+    // Genome buffers (initialised with default values)
+    std::vector<GenomeData> genomes(particles.positions.size());
+    for (size_t i = 0; i < genomes.size(); ++i) {
+        genomes[i].age       = 0.0f;
+        genomes[i].lifespan  = DEFAULT_LIFESPAN;
+        genomes[i].self_mod  = 1.0f;
+        genomes[i].cross_mod = 1.0f;
+        genomes[i].generation = 0u;
+    }
+    ctx.update_buffer(genome_buffer_a_, genomes.data(), genome_size);
+    ctx.update_buffer(genome_buffer_b_, genomes.data(), genome_size);
+
+    // Signal grid: zeroed
+    std::vector<float> zero_chem(CHEM_W * CHEM_H, 0.0f);
+    ctx.update_buffer(signal_grid_buffer_,  zero_chem.data(), chem_grid_size);
+    ctx.update_buffer(terrain_grid_buffer_, zero_chem.data(), chem_grid_size);
 
     allocate_and_write_descriptor_sets(ctx);
 
@@ -244,6 +267,10 @@ void ComputePipeline::clear_buffers(VulkanContext& ctx) {
     ctx.destroy_buffer(sorted_indices_buffer_);
     ctx.destroy_buffer(conversion_buffer_);
     ctx.destroy_buffer(halo_buffer_);
+    ctx.destroy_buffer(genome_buffer_a_);
+    ctx.destroy_buffer(genome_buffer_b_);
+    ctx.destroy_buffer(signal_grid_buffer_);
+    ctx.destroy_buffer(terrain_grid_buffer_);
 }
 
 // ── Write descriptor sets ─────────────────────────────────────────────────────
@@ -317,6 +344,9 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     auto cnv_sz  = conversion_buffer_.size;
     auto halo_sz = halo_buffer_.size;
     auto emod_sz = energy_mod_buffer_.size;
+    auto genome_sz = genome_buffer_a_.size;
+    auto signal_sz = signal_grid_buffer_.size;
+    auto terrain_sz = terrain_grid_buffer_.size;
 
     // ── Set A: in=a, out=b ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_a_,  0, pos_buffer_a_.handle,         pos_sz);
@@ -342,6 +372,10 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_image (writes, img_infos, desc_set_a_, 20, composite_tex.view);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 21, halo_buffer_.handle,           halo_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 22, energy_mod_buffer_.handle,     emod_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 23, genome_buffer_a_.handle,       genome_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 24, genome_buffer_b_.handle,       genome_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 25, signal_grid_buffer_.handle,    signal_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 26, terrain_grid_buffer_.handle,   terrain_sz);
 
     // ── Set B: in=b, out=a ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_b_,  0, pos_buffer_b_.handle,         pos_sz);
@@ -367,6 +401,10 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_image (writes, img_infos, desc_set_b_, 20, composite_tex.view);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 21, halo_buffer_.handle,           halo_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 22, energy_mod_buffer_.handle,     emod_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 23, genome_buffer_b_.handle,       genome_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 24, genome_buffer_a_.handle,       genome_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 25, signal_grid_buffer_.handle,    signal_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 26, terrain_grid_buffer_.handle,   terrain_sz);
 
     vkUpdateDescriptorSets(ctx.device,
                            static_cast<uint32_t>(writes.size()),
@@ -414,6 +452,11 @@ void ComputePipeline::upload_energy_modifiers(VulkanContext& ctx,
     if (energy_mod_buffer_.handle == VK_NULL_HANDLE) return;
     VkDeviceSize sz = std::min(modifiers.size() * sizeof(float), energy_mod_buffer_.size);
     ctx.update_buffer(energy_mod_buffer_, modifiers.data(), sz);
+}
+
+void ComputePipeline::upload_terrain(VulkanContext& ctx, const float* data) {
+    if (terrain_grid_buffer_.handle == VK_NULL_HANDLE) return;
+    ctx.update_buffer(terrain_grid_buffer_, data, CHEM_W * CHEM_H * sizeof(float));
 }
 
 void ComputePipeline::read_current_state(VulkanContext& ctx,
@@ -540,6 +583,16 @@ vkCmdPipelineBarrier(cmd,
 pc.step = 5;
 vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
 vkCmdDispatch(cmd, (particle_count / GROUP_DENSITY) + 1, 1, 1);
+
+vkCmdPipelineBarrier(cmd,
+    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+    0, 1, &grid_barrier, 0, nullptr, 0, nullptr);
+
+// 5. Signal diffusion step
+pc.step = 6;
+vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
+vkCmdDispatch(cmd, 1, 1, 1);
 
 vkCmdPipelineBarrier(cmd,
     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,

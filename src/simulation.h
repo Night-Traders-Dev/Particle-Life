@@ -59,6 +59,8 @@ private:
     void fetch_geolocation();
     void fetch_weather();
     void resolve_zip_code(const std::string& zip);
+    void generate_terrain();
+    void spawn_seasonal_food();
     bool http_fetch(const std::string& url, std::string& result);
     float extract_json_float(const std::string& json, const std::string& key);
     std::string extract_json_string(const std::string& json, const std::string& key);

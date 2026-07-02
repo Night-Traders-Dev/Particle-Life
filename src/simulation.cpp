@@ -35,6 +35,9 @@ void Simulation::init(GLFWwindow* window) {
         fetch_geolocation();
     }
     last_weather_fetch_ = std::chrono::steady_clock::now();
+
+    // Generate terrain obstacles
+    generate_terrain();
 }
 
 void Simulation::destroy() {
@@ -220,13 +223,28 @@ void Simulation::tick(GLFWwindow* window, double dt) {
             }
         }
 
+        // Seasonal food spawning (every 1200 frames = ~20s)
+        if (iface.autospawn_enabled && organism_tick_counter_ % 1200 == 0)
+            spawn_seasonal_food();
+
+        // Weather disturbance effects
+        if (weather_.valid && weather_.weather_code >= 60) {
+            float storm_intensity = (weather_.weather_code >= 80) ? 2.0f : 1.0f;
+            for (size_t i = 0; i < particles.stats.size(); ++i) {
+                if (particles.types[i] != FOOD_TYPE_INDEX) {
+                    particles.energy[i] -= 0.001f * storm_intensity * static_cast<float>(dt);
+                    if (particles.energy[i] < 0.0f) particles.energy[i] = 0.0f;
+                }
+            }
+        }
+
+        // Organism detection (every N frames)
         if (organism_tick_counter_ % ORGANISM_UPDATE_INTERVAL == 0) {
             readback_positions_.resize(cfg.particle_count);
             readback_velocities_.resize(cfg.particle_count);
             readback_types_.resize(cfg.particle_count);
             compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_types_);
-            
-            // Sync back to CPU particles if we want them to stay in sync
+
             particles.types = readback_types_;
 
             organism_manager.update(readback_positions_, readback_velocities_,
@@ -409,6 +427,71 @@ void Simulation::resolve_zip_code(const std::string& zip) {
         if (!country.empty()) location_name_ += ", " + country;
     }
     weather_.location_name = location_name_;
+}
+
+void Simulation::generate_terrain() {
+    std::vector<float> grid(CHEM_W * CHEM_H, 0.0f);
+    std::mt19937 rng(42);
+    for (int o = 0; o < 12; ++o) {
+        float cx = (float)(rng() % CHEM_W);
+        float cy = (float)(rng() % CHEM_H);
+        float r = 8.0f + (float)(rng() % 20);
+        for (int y = 0; y < CHEM_H; ++y)
+            for (int x = 0; x < CHEM_W; ++x) {
+                float d = sqrt((float)((x - cx) * (x - cx) + (y - cy) * (y - cy)));
+                if (d < r) grid[x + y * CHEM_W] = std::max(grid[x + y * CHEM_W], 1.0f - d / r);
+            }
+    }
+    for (int w = 0; w < 6; ++w) {
+        int x1 = rng() % CHEM_W, y1 = rng() % CHEM_H;
+        int x2 = rng() % CHEM_W, y2 = rng() % CHEM_H;
+        int steps = std::max(abs(x2 - x1), abs(y2 - y1));
+        for (int s = 0; s <= steps; ++s) {
+            float t = steps > 0 ? (float)s / steps : 0.0f;
+            int x = (int)(x1 + (float)(x2 - x1) * t);
+            int y = (int)(y1 + (float)(y2 - y1) * t);
+            if (x >= 0 && x < (int)CHEM_W && y >= 0 && y < (int)CHEM_H)
+                grid[x + y * CHEM_W] = 1.0f;
+        }
+    }
+    compute.upload_terrain(vk, grid.data());
+}
+
+void Simulation::spawn_seasonal_food() {
+    if (!compute.is_ready()) return;
+    auto now = std::chrono::system_clock::now();
+    auto now_t = std::chrono::system_clock::to_time_t(now);
+    auto* tm = std::localtime(&now_t);
+    float season_t = (float)(tm->tm_yday % 365) / 365.0f;
+    float angle = season_t * 2.0f * 3.14159f;
+    float zone_cx = 5000.0f * cos(angle);
+    float zone_cy = 3000.0f * sin(angle);
+
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> clump_x(zone_cx - 1000.0f, zone_cx + 1000.0f);
+    std::uniform_real_distribution<float> clump_y(zone_cy - 1000.0f, zone_cy + 1000.0f);
+    std::uniform_real_distribution<float> jitter(-100.0f, 100.0f);
+
+    const uint32_t n = cfg.particle_count;
+    compute.read_current_state(vk, particles.positions, particles.velocities, particles.types);
+    int food_count = 60;
+    uint32_t new_total = n + food_count;
+    particles.positions.resize(new_total);
+    particles.velocities.resize(new_total);
+    particles.types.resize(new_total);
+    particles.energy.resize(new_total, 1.0f);
+    particles.angles.resize(new_total, 0.0f);
+    particles.angular_velocities.resize(new_total, 0.0f);
+    particles.stats.resize(new_total);
+    for (int i = 0; i < food_count; ++i) {
+        int idx = n + i;
+        particles.positions[idx] = glm::vec2(clump_x(rng) + jitter(rng), clump_y(rng) + jitter(rng));
+        particles.velocities[idx] = glm::vec2(0.0f);
+        particles.types[idx] = FOOD_TYPE_INDEX;
+        particles.energy[idx] = 1.0f;
+    }
+    cfg.particle_count = new_total;
+    compute.resize_buffers(vk, particles);
 }
 
 void Simulation::fetch_geolocation() {

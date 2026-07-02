@@ -42,10 +42,16 @@ enum ParticleBehavior : uint32_t {
     BEHAVIOR_LEECH    = 1u << 5,  // drains energy from neighbors
     BEHAVIOR_SHIELD   = 1u << 6,  // resistant to viral and leech
     BEHAVIOR_POSITIVE = 1u << 7,  // positive charge
-    BEHAVIOR_NEGATIVE = 1u << 8,   // negative charge
-    BEHAVIOR_FOOD     = 1u << 9,   // NEW: Food particle (is eaten by others)
-    BEHAVIOR_ENERGY_SAVER = 1u << 10 // NEW: Reduced energy consumption
+    BEHAVIOR_NEGATIVE = 1u << 8,  // negative charge
+    BEHAVIOR_FOOD     = 1u << 9,  // Food particle (is eaten by others)
+    BEHAVIOR_ENERGY_SAVER = 1u << 10, // Reduced energy consumption
+    BEHAVIOR_PREDATOR = 1u << 11, // Actively hunts and converts prey
+    BEHAVIOR_SIGNALER = 1u << 12, // Emits chemical signals
 };
+
+static constexpr float DEFAULT_LIFESPAN  = 300.0f;
+static constexpr float MUTATION_RATE     = 0.1f;
+static constexpr float LIFESPAN_VARIANCE = 50.0f;
 
 static constexpr uint32_t FOOD_TYPE_INDEX = 9;
 static constexpr uint32_t NUM_FOOD_SPAWN_POINTS = 5;
@@ -57,8 +63,21 @@ struct ParticleStats {
     uint32_t membership_history_count = 0;
     float    spawn_time = 0.0f;
     int32_t  current_organism_id = -1;
-    float    min_temp = -10.0f; // New
-    float    max_temp = 50.0f;  // New
+    float    min_temp = -10.0f;
+    float    max_temp = 50.0f;
+    uint32_t kills = 0;
+    uint32_t divisions = 0;
+};
+
+// ── Per-particle genome (GPU-side, stored in a dedicated buffer) ──────────────
+// std430 layout: vec4-aligned
+struct alignas(16) GenomeData {
+    float age;
+    float lifespan;
+    float self_mod;      // multiplier for own-type attraction
+    float cross_mod;     // multiplier for cross-type attraction
+    uint32_t generation; // how many mitoses from initial seed
+    float padding[3];    // align to 32 bytes for future use
 };
 
 // ── GPU push-constant block (must match GLSL layout exactly) ─────────────────
