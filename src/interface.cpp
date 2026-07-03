@@ -188,6 +188,9 @@ void Interface::render_imgui(SimConfig&       cfg,
         draw_metrics_window(cfg, particles, org_manager);
     }
 
+    // Update mouse_within for ALL ImGui windows (status bar, HUD, pause, etc.)
+    mouse_within = ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
+
     if (!settings_visible) return;
 
     ImGuiIO& io = ImGui::GetIO();
@@ -200,6 +203,7 @@ void Interface::render_imgui(SimConfig&       cfg,
                  ImGuiWindowFlags_NoCollapse |
                  ImGuiWindowFlags_NoBringToFrontOnFocus);
 
+    // Re-check mouse_within now that the settings panel is visible
     mouse_within = ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
 
     ImGui::SeparatorText("Generation");
