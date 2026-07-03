@@ -19,7 +19,7 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
 - **Natural Selection:** Types that feed efficiently and reproduce outcompete others organically
 
 ### Physics Engine
-- Up to ~22,500 particles simulated in real time on the GPU
+- Up to ~25,000+ particles simulated in real time on the GPU
 - **Spatial Hash Grid:** O(n) neighbour lookups via a GPU-side grid (60-unit cells) with prefix-sum sorting
 - **Brownian Motion:** Temperature-dependent thermal noise — particles jitter more during daytime, less at night
 - **Fluid Viscosity:** Density-dependent Stokes drag — dense clusters experience higher resistance
@@ -151,12 +151,20 @@ Run from the project root:
 |-------|--------|
 | **F1** | Toggle settings panel |
 | **F2** | Reset simulation |
-| **Space** | Pause / unpause |
+| **F3** | Toggle FPS / particle HUD overlay |
 | **F11** | Toggle fullscreen |
+| **F12** | Save screenshot (PPM) |
+| **Space** | Pause / unpause |
 | **Esc** | Quit |
 | **Left drag** | Pan camera |
 | **Scroll wheel** | Zoom |
-| **Left click** | Spawn particle at cursor |
+| **Left click** | Spawn selected particle type at cursor |
+| **Right click** | Select nearest particle for inspection |
+| **T** | Toggle trait display mode (colour by self_mod) |
+| **P** | Cycle colour palette forward |
+| **B** | Cycle colour palette backward |
+| **N** | Reset to default palette |
+| **M** | Switch to magma palette |
 | **Status bar click** | Open Metrics Explorer |
 
 **Force grid** (Particle Values section):
@@ -169,16 +177,20 @@ Run from the project root:
 
 ```
 src/
-├── main.cpp              # Window creation, main loop
-├── simulation.cpp/h      # Top-level tick: input → compute → render
-├── vulkan_context.cpp/h  # Vulkan instance, device, swapchain
-├── compute_pipeline.cpp/h # GPU buffers, descriptor sets, dispatch
-├── renderer.cpp/h        # Render pass, fullscreen quad, ImGui
-├── particles.cpp/h       # CPU-side particle data & force generation
-├── interface.cpp/h       # ImGui panels, analytics, hover popups
-├── organism.cpp/h        # Cluster detection & organism tracking
-├── types.h               # Shared constants, enums, push constants
-└── serialization.h       # Config save/load
+├── core/
+│   ├── main.cpp          # Window creation, main loop
+│   └── types.h           # Shared constants, enums, push constants
+├── gpu/
+│   ├── vulkan_context.cpp/h   # Vulkan instance, device, swapchain
+│   ├── compute_pipeline.cpp/h # GPU buffers, descriptor sets, dispatch
+│   └── renderer.cpp/h    # Render pass, fullscreen quad, ImGui
+├── sim/
+│   ├── simulation.cpp/h  # Top-level tick: input → compute → render
+│   ├── particles.cpp/h   # CPU-side particle data & force generation
+│   └── organism.cpp/h    # Cluster detection & organism tracking
+└── ui/
+    ├── interface.cpp/h   # ImGui panels, analytics, hover popups
+    └── serialization.h   # Config save/load
 
 shaders/
 ├── compute.comp          # Physics, rendering, grid sorting (6 steps)

@@ -527,8 +527,8 @@ void Simulation::generate_terrain() {
         float cx = (float)(rng() % CHEM_W);
         float cy = (float)(rng() % CHEM_H);
         float r = 8.0f + (float)(rng() % 20);
-        for (int y = 0; y < CHEM_H; ++y)
-            for (int x = 0; x < CHEM_W; ++x) {
+        for (uint32_t y = 0; y < CHEM_H; ++y)
+            for (uint32_t x = 0; x < CHEM_W; ++x) {
                 float d = sqrt((float)((x - cx) * (x - cx) + (y - cy) * (y - cy)));
                 if (d < r) grid[x + y * CHEM_W] = std::max(grid[x + y * CHEM_W], 1.0f - d / r);
             }

@@ -162,7 +162,7 @@ struct SimConfig {
     bool     reset_colors       = false;
     bool     reset_forces       = true;
     uint32_t generation_seed    = 0;
-    char     zip_code[16]       = "";
+    char     zip_code[16]       = "41101";
 
     // Physics / rendering (real-time sliders)
     float radius             = 1.5f;

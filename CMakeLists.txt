@@ -22,14 +22,14 @@ FetchContent_MakeAvailable(imgui)
 # ── Executable ────────────────────────────────────────────────────────────────
 
 add_executable(particle_life
-    src/main.cpp
-    src/vulkan_context.cpp
-    src/particles.cpp
-    src/compute_pipeline.cpp
-    src/renderer.cpp
-    src/interface.cpp
-    src/simulation.cpp
-    src/organism.cpp
+    src/core/main.cpp
+    src/gpu/vulkan_context.cpp
+    src/sim/particles.cpp
+    src/gpu/compute_pipeline.cpp
+    src/gpu/renderer.cpp
+    src/ui/interface.cpp
+    src/sim/simulation.cpp
+    src/sim/organism.cpp
 
     # ImGui core
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -43,7 +43,10 @@ add_executable(particle_life
 )
 
 target_include_directories(particle_life PRIVATE
-    src/
+    src/core
+    src/gpu
+    src/sim
+    src/ui
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
