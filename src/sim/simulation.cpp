@@ -31,10 +31,11 @@ void Simulation::init(GLFWwindow* window) {
     if (cfg.zip_code[0] != '\0') {
         resolve_zip_code(cfg.zip_code);
         geolocation_fetched_ = true;
+        last_weather_fetch_ = std::chrono::steady_clock::time_point{}; // fetch weather immediately
     } else {
         fetch_geolocation();
+        last_weather_fetch_ = std::chrono::steady_clock::now();
     }
-    last_weather_fetch_ = std::chrono::steady_clock::now();
 
     // Generate terrain obstacles
     generate_terrain();
@@ -92,7 +93,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     // Weather fetch (every 10 minutes)
     auto now_steady = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now_steady - last_weather_fetch_).count();
-    if (elapsed > 600) {
+    if (elapsed > 60) {
         last_weather_fetch_ = now_steady;
         fetch_weather();
     }

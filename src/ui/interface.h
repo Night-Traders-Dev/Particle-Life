@@ -32,7 +32,7 @@ public:
     float metabolism_slider      = 0.2f;
     float infection_slider       = 0.2f;
     float spawn_slider           = 0.003f;
-    float time_scale_slider      = 1.5f;
+    float time_scale_slider      = 1.0f;
     int   seed_value             = 0;
     bool  reset_colors_check     = false;
     bool  reset_forces_check     = true;
