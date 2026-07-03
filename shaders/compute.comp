@@ -108,8 +108,8 @@ const uint CHEM_H = 180u;
 const float DEFAULT_LIFESPAN = 300.0f;
 
 const uint GRID_CELL_SIZE = 60u;
-const uint GRID_W         = (2560u / GRID_CELL_SIZE) + 2u;
-const uint GRID_H         = (1440u / GRID_CELL_SIZE) + 2u;
+const uint GRID_W         = (7680u / GRID_CELL_SIZE) + 2u;
+const uint GRID_H         = (4320u / GRID_CELL_SIZE) + 2u;
 
 // https://stackoverflow.com/questions/4200224/random-noise-functions-for-glsl
 float random(float v) {
@@ -551,11 +551,11 @@ void apply_physics(uint i) {
                     // Behavior flag mutation: small chance to gain/lose a random flag
                     if (r3 < 0.02f) {
                         uint flag_bit = 1u << uint(random(seed + 10.0f) * 9.0f);
-                        behavior_buffer.data[parent_type] |= flag_bit;
+                        atomicOr(behavior_buffer.data[parent_type], flag_bit);
                     }
                     if (r4 < 0.01f) {
                         uint flag_bit = 1u << uint(random(seed + 11.0f) * 9.0f);
-                        behavior_buffer.data[parent_type] &= ~flag_bit;
+                        atomicAnd(behavior_buffer.data[parent_type], ~flag_bit);
                     }
 
                     spawned = true;
@@ -584,7 +584,7 @@ void apply_physics(uint i) {
 
     out_pos_buffer.data[i] = pos_a;
     out_vel_buffer.data[i] = vel_a;
-    energy_out_buffer.data[i] = energy_a;
+    atomicExchange(energy_out_buffer.data[i], energy_a);
 
     // Age-pack into genome output (use age_size_mod in render via energy channel packed)
     genome.age = age;

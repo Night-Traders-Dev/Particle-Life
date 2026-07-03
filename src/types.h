@@ -17,8 +17,8 @@ static constexpr uint32_t GROUP_DENSITY      = 256;
 
 // Spatial Hash constants
 static constexpr uint32_t GRID_CELL_SIZE     = 60; // Matches default interaction_radius
-static constexpr uint32_t GRID_W             = (REGION_W / GRID_CELL_SIZE) + 2;
-static constexpr uint32_t GRID_H             = (REGION_H / GRID_CELL_SIZE) + 2;
+static constexpr uint32_t GRID_W             = ((REGION_W * 3) / GRID_CELL_SIZE) + 2;
+static constexpr uint32_t GRID_H             = ((REGION_H * 3) / GRID_CELL_SIZE) + 2;
 static constexpr uint32_t GRID_SIZE          = GRID_W * GRID_H;
 
 // Chemical Grid constants
