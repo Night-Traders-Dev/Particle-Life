@@ -14,3 +14,7 @@ cmake --build . -j$(nproc)
 # Copy compiled shaders to project root so the binary can be run from there
 cd ..
 cp build/shaders/*.spv shaders/
+
+# Run test suite
+echo ""
+bash tests/test_suite

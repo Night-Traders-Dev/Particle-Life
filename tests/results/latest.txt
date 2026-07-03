@@ -1,0 +1,43 @@
+========================================
+  Particle Life — Test Suite
+========================================
+
+=== Genome ===
+  passed=5 failed=0 score=100%
+
+=== Clustering ===
+  passed=6 failed=0 score=100%
+
+=== Speciation ===
+  passed=5 failed=0 score=100%
+
+=== Organism IDs ===
+  passed=4 failed=0 score=100%
+
+=== Energy ===
+  passed=9 failed=0 score=100%
+
+=== RNG ===
+  passed=4 failed=0 score=100%
+
+=== Terrain ===
+  passed=5 failed=0 score=100%
+
+=== Behavior Flags ===
+  passed=6 failed=0 score=100%
+
+=== Config ===
+  passed=9 failed=0 score=100%
+
+=== Force Matrix ===
+  passed=5 failed=0 score=100%
+
+=== Particles ===
+  passed=8 failed=0 score=100%
+
+========================================
+  OVERALL: 66 passed, 0 failed
+  SCORE:   100%
+========================================
+  TIMESTAMP: 2026-07-03 16:19:56
+========================================

@@ -277,3 +277,16 @@ shaders/
 ## License
 
 MIT
+---
+
+## 🧪 Test Suite
+
+| Metric | Value |
+|--------|-------|
+| **Status** | <span style="color:green">**PASSING**</span> |
+| **Last Run** | 2026-07-03 20:19:56 UTC |
+| **Passed** | 66 |
+| **Failed** | 0 |
+| **Score** | 100% |
+
+> Tests are run automatically on every build. Run `bash tests/test_suite` manually to re-run.

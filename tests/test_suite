@@ -1,0 +1,77 @@
+#!/bin/bash
+set -e
+
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BUILD_DIR="$PROJECT_ROOT/build"
+TEST_DIR="$PROJECT_ROOT/tests"
+RESULTS_DIR="$PROJECT_ROOT/tests/results"
+
+mkdir -p "$RESULTS_DIR"
+
+echo "========================================"
+echo "  Particle Life — Running Test Suite"
+echo "========================================"
+
+# Compile tests
+cd "$BUILD_DIR"
+g++ -std=c++17 -I"$PROJECT_ROOT/src" \
+    -I/usr/include/glm \
+    "$TEST_DIR"/*.cpp \
+    -o "$TEST_DIR/test_suite_bin" \
+    2>&1 | grep -v "^$" || true
+
+if [ ! -x "$TEST_DIR/test_suite_bin" ]; then
+    echo "[ERROR] Test compilation failed"
+    exit 1
+fi
+
+echo "[OK] Tests compiled successfully"
+
+# Run tests and capture output
+TEST_OUTPUT="$("$TEST_DIR/test_suite_bin" 2>&1)"
+TEST_EXIT=$?
+
+echo "$TEST_OUTPUT"
+
+# Parse results for reports
+TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+SCORE=$(echo "$TEST_OUTPUT" | grep -oP 'SCORE:\s+\K[0-9]+')
+PASSED=$(echo "$TEST_OUTPUT" | grep -oP 'OVERALL:\s+\K[0-9]+' | head -1)
+FAILED=$(echo "$TEST_OUTPUT" | grep -oP 'passed,\s+\K[0-9]+' | head -1)
+
+# Write raw results
+cat > "$RESULTS_DIR/latest.txt" <<EOF
+$TEST_OUTPUT
+EOF
+
+# Write JSON for external tooling
+cat > "$RESULTS_DIR/latest.json" <<EOF
+{
+  "timestamp": "$TIMESTAMP",
+  "passed": $PASSED,
+  "failed": $FAILED,
+  "score": $SCORE,
+  "exit_code": $TEST_EXIT
+}
+EOF
+
+# Update README badge/table
+README="$PROJECT_ROOT/README.md"
+if [ -f "$README" ]; then
+    # Replace or insert test results block
+    python3 "$TEST_DIR/update_readme.py" "$README" "$TIMESTAMP" "$PASSED" "$FAILED" "$SCORE" "$TEST_EXIT"
+fi
+
+if [ $TEST_EXIT -eq 0 ]; then
+    echo ""
+    echo "========================================"
+    echo "  ALL TESTS PASSED"
+    echo "========================================"
+else
+    echo ""
+    echo "========================================"
+    echo "  SOME TESTS FAILED"
+    echo "========================================"
+fi
+
+exit $TEST_EXIT
