@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iostream>
+#include <fstream>
 
 // ── Init / Destroy ────────────────────────────────────────────────────────────
 
@@ -29,11 +30,18 @@ void Simulation::init(GLFWwindow* window) {
     std::strncpy(iface.zip_code_buf, cfg.zip_code, sizeof(iface.zip_code_buf) - 1);
     iface.zip_code_buf[sizeof(iface.zip_code_buf) - 1] = '\0';
     if (cfg.zip_code[0] != '\0') {
-        resolve_zip_code(cfg.zip_code);
-        geolocation_fetched_ = true;
-        last_weather_fetch_ = std::chrono::steady_clock::time_point{}; // fetch weather immediately
+        request_zip_resolve(cfg.zip_code);
+        last_weather_fetch_ = std::chrono::steady_clock::time_point{}; // fetch weather asap
     } else {
-        fetch_geolocation();
+        // Sync geolocation at startup (fast ip-api call, happens before main loop)
+        std::string json;
+        if (http_fetch_sync("http://ip-api.com/json/?fields=lat,lon", json)) {
+            latitude_ = extract_json_float(json, "lat");
+            longitude_ = extract_json_float(json, "lon");
+        } else {
+            latitude_ = 40.7128f; longitude_ = -74.0060f; // fallback NYC
+        }
+        geolocation_fetched_ = true;
         last_weather_fetch_ = std::chrono::steady_clock::now();
     }
 
@@ -76,6 +84,9 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     float sin_val = std::sin(static_cast<float>(2.0 * 3.1415926535 * (t - 0.25)));
     float day_night_factor = 0.65f + 0.35f * sin_val;
 
+    // Drain completed async HTTP responses (non-blocking)
+    process_http_response();
+
     // Check for zip code change from UI
     if (iface.zip_code_changed) {
         iface.zip_code_changed = false;
@@ -83,19 +94,18 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         if (!zip.empty()) {
             std::strncpy(cfg.zip_code, zip.c_str(), sizeof(cfg.zip_code) - 1);
             cfg.zip_code[sizeof(cfg.zip_code) - 1] = '\0';
-            resolve_zip_code(zip);
-            geolocation_fetched_ = true;
+            request_zip_resolve(zip);
             last_weather_fetch_ = std::chrono::steady_clock::time_point{}; // force immediate fetch
             Serialization::save_config("config.bin", cfg, particles);
         }
     }
 
-    // Weather fetch (every 10 minutes)
+    // Weather fetch (every 60 seconds, non-blocking)
     auto now_steady = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now_steady - last_weather_fetch_).count();
-    if (elapsed > 60) {
+    if (elapsed > 60 && http_action_ == HttpAction::NONE) {
         last_weather_fetch_ = now_steady;
-        fetch_weather();
+        request_weather_fetch();
     }
 
     // Apply weather effects
@@ -465,9 +475,9 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
     rmb_prev = rmb_cur;
 }
 
-// ── Weather HTTP helpers ──────────────────────────────────────────────────────
+// ── Async HTTP helpers (non-blocking via std::async) ──────────────────────────
 
-bool Simulation::http_fetch(const std::string& url, std::string& result) {
+bool Simulation::http_fetch_sync(const std::string& url, std::string& result) {
     std::string cmd = "curl -s --max-time 5 \"" + url + "\" 2>/dev/null";
     FILE* pipe = popen(cmd.c_str(), "r");
     if (!pipe) return false;
@@ -475,6 +485,72 @@ bool Simulation::http_fetch(const std::string& url, std::string& result) {
     while (fgets(buf, sizeof(buf), pipe)) result += buf;
     int ret = pclose(pipe);
     return ret == 0 && !result.empty();
+}
+
+void Simulation::request_weather_fetch() {
+    if (!geolocation_fetched_) return; // wait for ZIP/geo resolve
+    std::string url = "https://api.open-meteo.com/v1/forecast?"
+        "latitude=" + std::to_string(latitude_) +
+        "&longitude=" + std::to_string(longitude_) +
+        "&current=temperature_2m,weather_code,precipitation,wind_speed_10m,wind_direction_10m,cloud_cover";
+    http_action_ = HttpAction::WEATHER;
+    http_future_ = std::async(std::launch::async, [url]() {
+        std::string result;
+        http_fetch_sync(url, result);
+        return result;
+    });
+}
+
+void Simulation::request_zip_resolve(const std::string& zip) {
+    pending_zip_ = zip;
+    std::string url = "https://geocoding-api.open-meteo.com/v1/search?name=" + zip + "&count=1&language=en&format=json";
+    http_action_ = HttpAction::ZIP_RESOLVE;
+    http_future_ = std::async(std::launch::async, [url]() {
+        std::string result;
+        http_fetch_sync(url, result);
+        return result;
+    });
+}
+
+void Simulation::process_http_response() {
+    if (!http_future_.valid()) return;
+    if (http_future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+
+    std::string json = http_future_.get();
+    HttpAction done_action = http_action_;
+    http_action_ = HttpAction::NONE;
+
+    if (json.empty()) return;
+
+    if (done_action == HttpAction::WEATHER) {
+        auto cur = json.find("\"current\"");
+        if (cur == std::string::npos) { weather_.valid = false; return; }
+        std::string current = json.substr(cur);
+        WeatherData w{};
+        w.temperature_c   = extract_json_float(current, "temperature_2m");
+        w.cloud_cover_pct = extract_json_float(current, "cloud_cover");
+        w.wind_speed_kmh  = extract_json_float(current, "wind_speed_10m");
+        w.wind_dir_deg    = extract_json_float(current, "wind_direction_10m");
+        w.weather_code    = static_cast<int>(extract_json_float(current, "weather_code"));
+        w.fetch_time      = std::chrono::steady_clock::now();
+        w.valid           = true;
+        weather_ = w;
+        weather_.location_name = location_name_;
+        weather_fetched_ = true;
+    } else if (done_action == HttpAction::ZIP_RESOLVE) {
+        auto results = json.find("\"results\"");
+        if (results == std::string::npos) return;
+        std::string first = json.substr(results);
+        latitude_ = extract_json_float(first, "latitude");
+        longitude_ = extract_json_float(first, "longitude");
+        location_name_ = extract_json_string(first, "name");
+        if (!location_name_.empty()) {
+            std::string country = extract_json_string(first, "country");
+            if (!country.empty()) location_name_ += ", " + country;
+        }
+        weather_.location_name = location_name_;
+        geolocation_fetched_ = true;
+    }
 }
 
 float Simulation::extract_json_float(const std::string& json, const std::string& key) {
@@ -502,23 +578,6 @@ std::string Simulation::extract_json_string(const std::string& json, const std::
     auto end = json.find('"', pos + 1);
     if (end == std::string::npos) return "";
     return json.substr(pos + 1, end - pos - 1);
-}
-
-void Simulation::resolve_zip_code(const std::string& zip) {
-    std::string url = "https://geocoding-api.open-meteo.com/v1/search?name=" + zip + "&count=1&language=en&format=json";
-    std::string json;
-    if (!http_fetch(url, json)) return;
-    auto results = json.find("\"results\"");
-    if (results == std::string::npos) return;
-    std::string first = json.substr(results);
-    latitude_ = extract_json_float(first, "latitude");
-    longitude_ = extract_json_float(first, "longitude");
-    location_name_ = extract_json_string(first, "name");
-    if (!location_name_.empty()) {
-        std::string country = extract_json_string(first, "country");
-        if (!country.empty()) location_name_ += ", " + country;
-    }
-    weather_.location_name = location_name_;
 }
 
 void Simulation::generate_terrain() {
@@ -595,7 +654,6 @@ void Simulation::spawn_seasonal_food() {
         compute.upload_particle_range(vk, particles, n, food_count);
 }
 
-#include <fstream>
 void Simulation::save_screenshot() {
     if (!compute.is_ready()) return;
     vkQueueWaitIdle(vk.queue);
@@ -634,47 +692,6 @@ void Simulation::save_screenshot() {
     }
 
     std::cout << "Screenshot saved: " << fname << " (" << (num_pixels * 3) / (1024*1024) << " MB)\n";
-}
-
-void Simulation::fetch_geolocation() {
-    if (geolocation_fetched_) return;
-    std::string json;
-    if (!http_fetch("http://ip-api.com/json/?fields=lat,lon", json)) {
-        // Fallback: moderate US location
-        latitude_ = 40.7128f; longitude_ = -74.0060f;
-        return;
-    }
-    latitude_ = extract_json_float(json, "lat");
-    longitude_ = extract_json_float(json, "lon");
-    geolocation_fetched_ = true;
-}
-
-void Simulation::fetch_weather() {
-    if (!geolocation_fetched_) fetch_geolocation();
-    std::string url = "https://api.open-meteo.com/v1/forecast?"
-        "latitude=" + std::to_string(latitude_) +
-        "&longitude=" + std::to_string(longitude_) +
-        "&current=temperature_2m,weather_code,precipitation,wind_speed_10m,wind_direction_10m,cloud_cover";
-    std::string json;
-    if (!http_fetch(url, json)) {
-        weather_.valid = false;
-        return;
-    }
-    // Navigate to the "current" object
-    auto cur = json.find("\"current\"");
-    if (cur == std::string::npos) { weather_.valid = false; return; }
-    std::string current = json.substr(cur);
-
-    WeatherData w{};
-    w.temperature_c   = extract_json_float(current, "temperature_2m");
-    w.cloud_cover_pct = extract_json_float(current, "cloud_cover");
-    w.wind_speed_kmh  = extract_json_float(current, "wind_speed_10m");
-    w.wind_dir_deg    = extract_json_float(current, "wind_direction_10m");
-    w.weather_code    = static_cast<int>(extract_json_float(current, "weather_code"));
-    w.fetch_time      = std::chrono::steady_clock::now();
-    w.valid           = true;
-    weather_ = w;
-    weather_fetched_ = true;
 }
 
 // ── Scroll callback (called from main.cpp) ────────────────────────────────────

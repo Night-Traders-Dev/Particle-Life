@@ -10,6 +10,7 @@
 #include <GLFW/glfw3.h>
 #include <vector>
 #include <string>
+#include <future>
 
 class Simulation;
 // Call once after init() to hook the GLFW scroll callback
@@ -61,15 +62,20 @@ private:
     bool      geolocation_fetched_ = false;
     bool      weather_fetched_     = false;
 
-    void fetch_geolocation();
-    void fetch_weather();
-    void resolve_zip_code(const std::string& zip);
     void generate_terrain();
     void spawn_seasonal_food();
     void save_screenshot();
-    bool http_fetch(const std::string& url, std::string& result);
+    static bool http_fetch_sync(const std::string& url, std::string& result);
     float extract_json_float(const std::string& json, const std::string& key);
     std::string extract_json_string(const std::string& json, const std::string& key);
+
+    // Async HTTP (non-blocking — launched via std::async)
+    void request_weather_fetch();
+    void request_zip_resolve(const std::string& zip);
+    void process_http_response();     // call each tick to drain completed fetches
+    std::future<std::string> http_future_;
+    enum class HttpAction { NONE, WEATHER, ZIP_RESOLVE } http_action_ = HttpAction::NONE;
+    std::string pending_zip_;
 
     // Organism tracking
     int                    organism_tick_counter_ = 0;
