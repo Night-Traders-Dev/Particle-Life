@@ -143,6 +143,14 @@ Click the status bar's particle/organism counter to open the **Metrics Explorer*
   - Trophic efficiency ratio
   - Per-type population percentages with generation averages
 
+### Ecosystem Telemetry Log
+- **Persistent CSV log** (`ecosystem_log.csv`) written every organism-detection frame
+- Columns: time, frame, populations per type, energy, diversity, temperature, wind, births, deaths
+- **Event log** (`ecosystem_events.log`) records collapses, recoveries, speciation events with timestamps
+- Collapse detection: warns when any type drops below 33% of previous sample
+- Press **F5** to dump a live summary to the terminal
+- Logs auto-restart on simulation reset (F2) and close on exit
+
 ### Interaction & Inspection
 - **Interactive Hover:** Hover over any particle to see its type, conversion history, and age
 - **Organism Inspection:** Hover popup shows organism composition and metrics
@@ -204,6 +212,7 @@ Run from the project root:
 | **F1** | Toggle settings panel |
 | **F2** | Reset simulation |
 | **F3** | Toggle FPS / particle HUD overlay |
+| **F5** | Dump ecosystem log summary to console |
 | **F11** | Toggle fullscreen |
 | **F12** | Save screenshot (PPM) |
 | **Space** | Pause / unpause |

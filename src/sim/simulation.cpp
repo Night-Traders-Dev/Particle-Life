@@ -10,6 +10,7 @@
 #include <cstring>
 #include <iostream>
 #include <fstream>
+#include <iomanip>
 
 // ── Init / Destroy ────────────────────────────────────────────────────────────
 
@@ -47,9 +48,22 @@ void Simulation::init(GLFWwindow* window) {
 
     // Generate terrain obstacles
     generate_terrain();
+
+    // Start ecosystem telemetry log
+    auto log_now = std::chrono::system_clock::now();
+    auto log_since_epoch = std::chrono::duration_cast<std::chrono::seconds>(log_now.time_since_epoch()).count();
+    init_ecosystem_log(static_cast<double>(log_since_epoch));
 }
 
 void Simulation::destroy() {
+    if (eco_log_.is_open()) {
+        log_event(std::chrono::duration_cast<std::chrono::duration<double>>(
+            std::chrono::system_clock::now().time_since_epoch()).count(),
+            static_cast<uint64_t>(organism_tick_counter_), "END", "Simulation terminated");
+        eco_log_.close();
+        eco_events_.close();
+        std::cout << "[EcoLog] log closed\n";
+    }
     vkDeviceWaitIdle(vk.device);
     compute.destroy(vk);
     renderer.destroy(vk);
@@ -88,6 +102,16 @@ void Simulation::reset() {
 
     organism_tick_counter_ = 0;
     niche_tick_counter_ = 0;
+
+    // Restart ecosystem log on reset
+    if (eco_log_.is_open()) {
+        eco_log_.close();
+        eco_events_.close();
+    }
+    auto rnow = std::chrono::system_clock::now();
+    auto rsec = std::chrono::duration_cast<std::chrono::duration<double>>(
+        rnow.time_since_epoch()).count();
+    init_ecosystem_log(rsec);
 }
 
     // ── Per-frame tick ────────────────────────────────────────────────────────────
@@ -326,6 +350,42 @@ void Simulation::tick(GLFWwindow* window, double dt) {
                 iface.current_trophic_efficiency = (deaths_delta > 0 && pred_energy > 0.01f)
                     ? (float)deaths_delta / pred_energy : 0.0f;
             }
+
+            // Write ecosystem telemetry log
+            {
+                uint32_t type_counts[MAX_PARTICLE_TYPES] = {};
+                uint32_t total = 0;
+                for (uint32_t i = 0; i < readback_types_.size(); ++i) {
+                    uint32_t t = readback_types_[i];
+                    if (t < MAX_PARTICLE_TYPES) { type_counts[t]++; total++; }
+                }
+                float total_energy = 0.0f;
+                for (auto& e : particles.energy) total_energy += e;
+
+                // Count births (new non-food particles) and deaths (became food)
+                uint32_t births = 0, deaths = 0;
+                for (uint32_t i = 0; i < readback_types_.size(); ++i) {
+                    uint32_t rt = readback_types_[i];
+                    if (rt != FOOD_TYPE_INDEX) {
+                        // If this particle's energy is near 1.0 and it wasn't counted in prev sample
+                        if (particles.energy[i] > 0.9f && prev_log_populations_[rt] > 0)
+                            births++;
+                    }
+                    if (rt == FOOD_TYPE_INDEX && particles.energy[i] < 0.3f)
+                        deaths++;
+                }
+                auto now_epoch = std::chrono::system_clock::now();
+                auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
+                    now_epoch.time_since_epoch()).count();
+                write_ecosystem_log(secs, static_cast<uint64_t>(organism_tick_counter_),
+                                    type_counts, total, total_energy,
+                                    iface.current_diversity,
+                                    iface.current_trophic_efficiency,
+                                    iface.current_energy_flux,
+                                    births, deaths);
+                std::memcpy(prev_log_populations_, type_counts, sizeof(type_counts));
+                prev_log_total_energy_ = total_energy;
+            }
         }
     }
 }
@@ -366,6 +426,39 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
     if (f3_cur && !f3_prev)
         iface.hud_visible = !iface.hud_visible;
     f3_prev = f3_cur;
+
+    // F5: dump ecosystem log summary to console
+    static bool f5_prev = false;
+    bool f5_cur = (glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS);
+    if (f5_cur && !f5_prev) {
+        std::cout << "\n=== ECOSYSTEM LOG SUMMARY ===\n";
+        std::cout << "Frames logged: " << log_frame_ << "\n";
+        std::cout << "Current: " << cfg.particle_count << " particles, "
+                  << organism_manager.organisms.size() << " organisms\n";
+        uint32_t type_total = 0;
+        uint32_t type_counts[MAX_PARTICLE_TYPES] = {};
+        if (!readback_types_.empty()) {
+            for (auto t : readback_types_)
+                if (t < MAX_PARTICLE_TYPES) { type_counts[t]++; type_total++; }
+            for (uint32_t t = 0; t < cfg.particle_types; ++t) {
+                float pct = type_total > 0 ? (float)type_counts[t] / type_total * 100.0f : 0.0f;
+                uint32_t flags = particles.behavior_flags[t];
+                std::cout << "  Type " << t << ": " << type_counts[t]
+                          << " (" << std::fixed << std::setprecision(1) << pct << "%)"
+                          << "  flags=0x" << std::hex << flags << std::dec << "\n";
+            }
+        }
+        std::cout << "Diversity: " << iface.current_diversity
+                  << "  Energy flux: " << iface.current_energy_flux
+                  << "  Trophic eff: " << iface.current_trophic_efficiency << "\n";
+        std::cout << "Temp: " << cfg.current_temperature
+                  << "°C  Weather code: " << weather_.weather_code << "\n";
+        if (eco_log_.is_open())
+            std::cout << "Log: ecosystem_log.csv (" << log_frame_ << " rows)\n";
+        std::cout << "Events: ecosystem_events.log\n";
+        std::cout << "==============================\n\n";
+    }
+    f5_prev = f5_cur;
 
     // P: cycle palette forward (default → viridis → plasma → magma → inferno → default)
     static bool p_prev = false;
@@ -820,6 +913,108 @@ void Simulation::update_niche_construction() {
     }
 
     compute.upload_terrain(vk, terrain.data());
+}
+
+// ── Ecosystem telemetry log ─────────────────────────────────────────────────
+
+void Simulation::init_ecosystem_log(double now) {
+    // Close previous log if any
+    if (eco_log_.is_open()) eco_log_.close();
+    if (eco_events_.is_open()) eco_events_.close();
+
+    log_start_time_ = now;
+    log_frame_ = 0;
+    std::memset(prev_log_populations_, 0, sizeof(prev_log_populations_));
+    prev_log_total_energy_ = 0.0f;
+    std::memset(collapse_consecutive_, 0, sizeof(collapse_consecutive_));
+
+    eco_log_.open("ecosystem_log.csv");
+    eco_log_ << "time,frame,total_particles,total_energy,diversity,trophic_eff,"
+                "energy_flux,organism_count,avg_gen,temp,wind_x,wind_y,weather,"
+                "pop_0,pop_1,pop_2,pop_3,pop_4,pop_5,pop_6,pop_7,pop_8,pop_9,"
+                "births,deaths,collapse\n";
+
+    eco_events_.open("ecosystem_events.log");
+    eco_events_ << "time,frame,category,description\n";
+
+    log_event(now, 0, "START", "Simulation started");
+    std::cout << "[EcoLog] logging to ecosystem_log.csv\n";
+}
+
+void Simulation::write_ecosystem_log(double now, uint64_t frame_num,
+                                      const uint32_t* type_counts, uint32_t total,
+                                      float total_energy, float diversity,
+                                      float trophic_eff, float energy_flux,
+                                      uint32_t births, uint32_t deaths)
+{
+    if (!eco_log_.is_open()) return;
+    log_frame_++;
+
+    double elapsed = now - log_start_time_;
+    eco_log_ << std::fixed << std::setprecision(2)
+             << elapsed << "," << frame_num << "," << total << ","
+             << total_energy << "," << diversity << "," << trophic_eff << ","
+             << energy_flux << ","
+             << organism_manager.organisms.size() << ","
+             << organism_manager.avg_generation << ","
+             << cfg.current_temperature << ","
+             << weather_.wind_speed_kmh * std::cos(glm::radians(weather_.wind_dir_deg)) * 0.002f << ","
+             << weather_.wind_speed_kmh * std::sin(glm::radians(weather_.wind_dir_deg)) * 0.002f << ","
+             << weather_.weather_code;
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t)
+        eco_log_ << "," << type_counts[t];
+    eco_log_ << "," << births << "," << deaths;
+
+    // Collapse detection: any non-food type dropped significantly
+    int collapse_flag = 0;
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES - 1; ++t) { // exclude food (type 9)
+        uint32_t prev = prev_log_populations_[t];
+        uint32_t curr = type_counts[t];
+        if (prev > 20 && curr < prev / 3) {
+            collapse_consecutive_[t]++;
+            if (collapse_consecutive_[t] >= 2) {
+                collapse_flag = 1;
+                char buf[128];
+                snprintf(buf, sizeof(buf), "Type %u collapsed: %u -> %u (%.0f%%)",
+                         t, prev, curr, (float)curr / std::max(1u, prev) * 100.0f);
+                log_event(now, frame_num, "COLLAPSE", buf);
+            }
+        } else if (prev > 10 && curr > prev * 2) {
+            collapse_consecutive_[t] = 0;
+            char buf[128];
+            snprintf(buf, sizeof(buf), "Type %u recovered/boom: %u -> %u",
+                     t, prev, curr);
+            log_event(now, frame_num, "RECOVERY", buf);
+        } else {
+            collapse_consecutive_[t] = std::max(0, collapse_consecutive_[t] - 1);
+        }
+    }
+    // Speciation events (detected via organism manager species records diverging)
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+        if (organism_manager.species_records[t].divergence > 0.35f &&
+            prev_log_populations_[t] > 10 && type_counts[t] > 10) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "Type %u divergence %.2f — speciation imminent",
+                     t, organism_manager.species_records[t].divergence);
+            log_event(now, frame_num, "SPECIATION", buf);
+            organism_manager.species_records[t].divergence = 0.0f; // reset
+        }
+    }
+
+    eco_log_ << "," << collapse_flag << "\n";
+}
+
+void Simulation::log_event(double now, uint64_t frame_num,
+                            const char* category, const std::string& desc)
+{
+    if (!eco_events_.is_open()) return;
+    double elapsed = now - log_start_time_;
+    eco_events_ << std::fixed << std::setprecision(2)
+                << elapsed << "," << frame_num << ","
+                << category << "," << desc << "\n";
+    eco_events_.flush();
+    // Also print to console for real-time awareness
+    std::cout << "[EcoLog:" << category << "] " << desc << "\n";
 }
 
 void Simulation::save_screenshot() {

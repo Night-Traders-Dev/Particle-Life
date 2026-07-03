@@ -11,6 +11,7 @@
 #include <vector>
 #include <string>
 #include <future>
+#include <fstream>
 
 class Simulation;
 // Call once after init() to hook the GLFW scroll callback
@@ -86,6 +87,23 @@ private:
     std::vector<glm::vec2> readback_velocities_;
     std::vector<uint32_t>  readback_types_;
     std::vector<glm::vec2> cached_positions_; // for particle selection (updated on org detection)
+
+    // Ecosystem telemetry log (persistent CSV for collapse analysis)
+    std::ofstream eco_log_;
+    std::ofstream eco_events_;
+    int      log_frame_               = 0;
+    uint32_t prev_log_populations_[MAX_PARTICLE_TYPES] = {};
+    float    prev_log_total_energy_   = 0.0f;
+    int      collapse_consecutive_[MAX_PARTICLE_TYPES] = {};
+    double   log_start_time_          = 0.0;
+    void init_ecosystem_log(double now);
+    void write_ecosystem_log(double now, uint64_t frame_num,
+                             const uint32_t* type_counts, uint32_t total,
+                             float total_energy, float diversity,
+                             float trophic_eff, float energy_flux,
+                             uint32_t births, uint32_t deaths);
+    void log_event(double now, uint64_t frame_num,
+                   const char* category, const std::string& desc);
 
     // Shader SPIRV paths (relative to working directory = build dir)
     static constexpr const char* COMPUTE_SPV  = "shaders/compute.spv";
