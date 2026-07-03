@@ -11,6 +11,8 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <time.h>
+#include <cstdio>
 
 // ── Init / Destroy ────────────────────────────────────────────────────────────
 
@@ -145,7 +147,8 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     // Real-time day/night cycle based on system clock
     auto now = std::chrono::system_clock::now();
     auto now_t = std::chrono::system_clock::to_time_t(now);
-    auto* tm = std::localtime(&now_t);
+    std::tm tm_buf{};
+    auto* tm = localtime_r(&now_t, &tm_buf);
     day_night_time_ = tm->tm_hour * 3600.0 + tm->tm_min * 60.0 + tm->tm_sec;
 
     // Smooth sine-based day/night factor: peak at noon (1.0), trough at midnight (~0.3)
@@ -245,7 +248,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     if (is_active && compute.is_ready()) {
         // Natural food spawning: small food patches grow from existing food clusters
         if (iface.autospawn_enabled && organism_tick_counter_ % 600 == 0) {
-            vkQueueWaitIdle(vk.queue);
+            vkWaitForFences(vk.device, 1, &vk.readback_fence, VK_TRUE, UINT64_MAX);
             compute.read_current_state(vk, particles.positions, particles.velocities, particles.types);
             const uint32_t n = cfg.particle_count;
 
@@ -348,39 +351,34 @@ void Simulation::tick(GLFWwindow* window, double dt) {
             if (readback_positions_.size() == readback_types_.size())
                 update_seasonal_migration();
 
-            // Compute ecosystem health metrics from readback data
+            // Compute ecosystem health metrics from readback data (fused single-pass)
             {
                 uint32_t type_counts[MAX_PARTICLE_TYPES] = {};
                 uint32_t total = 0;
+                float total_energy = 0.0f;
+                float pred_energy = 0.0f;
+                uint32_t current_deaths = 0;
+
                 for (uint32_t i = 0; i < readback_types_.size(); ++i) {
                     uint32_t t = readback_types_[i];
                     if (t < MAX_PARTICLE_TYPES) { type_counts[t]++; total++; }
+                    total_energy += particles.energy[i];
+                    if (t == FOOD_TYPE_INDEX && particles.types[i] != FOOD_TYPE_INDEX)
+                        current_deaths++;
+                    if (t < MAX_PARTICLE_TYPES &&
+                        (particles.behavior_flags[t] & BEHAVIOR_PREDATOR) != 0u)
+                        pred_energy += particles.energy[i];
                 }
                 iface.current_diversity = iface.simpson_diversity(type_counts, cfg.particle_types, total);
 
-                // Energy flux
-                float total_energy = 0.0f;
-                for (auto& p : particles.energy) total_energy += p;
                 int head = iface.history_head;
                 iface.total_energy_history[head] = total_energy;
 
                 int prev_head = (head == 0) ? iface.HISTORY_LEN - 1 : head - 1;
                 iface.current_energy_flux = total_energy - iface.total_energy_history[prev_head];
 
-                // Trophic efficiency: (prey deaths) / (predator energy)
-                uint32_t current_deaths = 0;
-                for (uint32_t i = 0; i < readback_types_.size(); ++i) {
-                    if (readback_types_[i] == FOOD_TYPE_INDEX && particles.types[i] != FOOD_TYPE_INDEX)
-                        current_deaths++;
-                }
                 uint32_t deaths_delta = (current_deaths >= iface.prev_deaths) ? current_deaths - iface.prev_deaths : 0;
                 iface.prev_deaths = current_deaths;
-                float pred_energy = 0.0f;
-                for (uint32_t i = 0; i < readback_types_.size(); ++i) {
-                    if (readback_types_[i] < MAX_PARTICLE_TYPES &&
-                        (particles.behavior_flags[readback_types_[i]] & BEHAVIOR_PREDATOR) != 0u)
-                        pred_energy += particles.energy[i];
-                }
                 iface.current_trophic_efficiency = (deaths_delta > 0 && pred_energy > 0.01f)
                     ? (float)deaths_delta / pred_energy : 0.0f;
             }
@@ -389,12 +387,12 @@ void Simulation::tick(GLFWwindow* window, double dt) {
             {
                 uint32_t type_counts[MAX_PARTICLE_TYPES] = {};
                 uint32_t total = 0;
+                float total_energy = 0.0f;
                 for (uint32_t i = 0; i < readback_types_.size(); ++i) {
                     uint32_t t = readback_types_[i];
                     if (t < MAX_PARTICLE_TYPES) { type_counts[t]++; total++; }
+                    total_energy += particles.energy[i];
                 }
-                float total_energy = 0.0f;
-                for (auto& e : particles.energy) total_energy += e;
 
                 // Count births/deaths as net change in non-food population.
                 // Skip on first sample (prev data is all zeros from init).
@@ -612,7 +610,7 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
         particles.velocities.resize(n);
         particles.types.resize(n);
         // Wait for previous frame to finish so GPU buffers are ready for readback
-        vkQueueWaitIdle(vk.queue);
+        vkWaitForFences(vk.device, 1, &vk.readback_fence, VK_TRUE, UINT64_MAX);
         compute.read_current_state(vk,
                                    particles.positions,
                                    particles.velocities,
@@ -855,7 +853,8 @@ void Simulation::spawn_seasonal_food() {
     if (!compute.is_ready()) return;
     auto now = std::chrono::system_clock::now();
     auto now_t = std::chrono::system_clock::to_time_t(now);
-    auto* tm = std::localtime(&now_t);
+    std::tm tm_buf{};
+    auto* tm = localtime_r(&now_t, &tm_buf);
     float season_t = (float)(tm->tm_yday % 365) / 365.0f;
     float angle = season_t * 2.0f * 3.14159f;
     float zone_cx = 5000.0f * cos(angle);
@@ -867,7 +866,7 @@ void Simulation::spawn_seasonal_food() {
     std::uniform_real_distribution<float> jitter(-100.0f, 100.0f);
 
     const uint32_t n = cfg.particle_count;
-    vkQueueWaitIdle(vk.queue);
+    vkWaitForFences(vk.device, 1, &vk.readback_fence, VK_TRUE, UINT64_MAX);
     compute.read_current_state(vk, particles.positions, particles.velocities, particles.types);
     int food_count = 30;
     uint32_t new_total = n + food_count;
@@ -1049,14 +1048,13 @@ void Simulation::log_event(double now, uint64_t frame_num,
     eco_events_ << std::fixed << std::setprecision(2)
                 << elapsed << "," << frame_num << ","
                 << category << "," << desc << "\n";
-    eco_events_.flush();
     // Also print to console for real-time awareness
     std::cout << "[EcoLog:" << category << "] " << desc << "\n";
 }
 
 void Simulation::save_screenshot() {
     if (!compute.is_ready()) return;
-    vkQueueWaitIdle(vk.queue);
+    vkWaitForFences(vk.device, 1, &vk.readback_fence, VK_TRUE, UINT64_MAX);
 
     std::vector<float> pixels;
     compute.readback_particle_texture(vk, pixels);
@@ -1067,8 +1065,9 @@ void Simulation::save_screenshot() {
     shot_count++;
     auto now = std::chrono::system_clock::now();
     auto t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_buf{};
     char fname[64];
-    std::strftime(fname, sizeof(fname), "screenshot_%Y%m%d_%H%M%S.ppm", std::localtime(&t));
+    std::strftime(fname, sizeof(fname), "screenshot_%Y%m%d_%H%M%S.ppm", localtime_r(&t, &tm_buf));
 
     std::ofstream f(fname, std::ios::binary);
     if (!f) {

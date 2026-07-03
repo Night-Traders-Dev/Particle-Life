@@ -55,6 +55,7 @@ public:
     uint32_t                 queue_family    = 0;
     VkSurfaceKHR             surface         = VK_NULL_HANDLE;
     VkCommandPool            cmd_pool        = VK_NULL_HANDLE;
+    VkFence                  readback_fence  = VK_NULL_HANDLE; // signaled when last frame's work is complete
 
     VkSwapchainKHR           swapchain       = VK_NULL_HANDLE;
     VkFormat                 swapchain_format{};

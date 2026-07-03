@@ -1,5 +1,11 @@
 # Particle Life
 
+![C++](https://img.shields.io/badge/C%2B%2B-20-blue)
+![Vulkan](https://img.shields.io/badge/Vulkan-1.2-green)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+![Tests](https://img.shields.io/badge/tests-66%20passed%2F66-success)
+![Score](https://img.shields.io/badge/score-100%25-brightgreen)
+
 A GPU-accelerated particle life simulation with biologically-inspired emergent behaviour,
 evolution, and ecosystem dynamics. Thousands of particles interact through configurable
 force matrices, self-organise into organisms, speciate when their genome diverges, and
@@ -284,7 +290,7 @@ MIT
 | Metric | Value |
 |--------|-------|
 | **Status** | <span style="color:green">**PASSING**</span> |
-| **Last Run** | 2026-07-03 20:19:56 UTC |
+| **Last Run** | 2026-07-03 22:04:30 UTC |
 | **Passed** | 66 |
 | **Failed** | 0 |
 | **Score** | 100% |

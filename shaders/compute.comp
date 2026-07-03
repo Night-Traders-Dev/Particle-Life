@@ -321,7 +321,7 @@ void apply_physics(uint i) {
 
                     // Predator sense: wider awareness
                     if (is_predator) {
-                        vec2 to_b = normalize(delta);
+                        vec2 to_b = normal;
                         float facing_dot = dot(vel_dir_a, -to_b);
                         if (facing_dot < -0.5f) continue;
                     }
@@ -340,7 +340,6 @@ void apply_physics(uint i) {
                         attraction += charge_force;
                     }
 
-                    normal = normalize(delta);
                     float force;
 
                     // Viral infection logic

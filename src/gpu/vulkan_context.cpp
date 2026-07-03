@@ -39,26 +39,10 @@ void VulkanContext::init(GLFWwindow* window) {
     pick_physical_device();
     create_logical_device();
     create_command_pool();
-    create_swapchain(window);
-    create_swapchain_image_views();
-}
 
-void VulkanContext::destroy() {
-    cleanup_swapchain();
-    vkDestroyCommandPool(device, cmd_pool, nullptr);
-    vkDestroyDevice(device, nullptr);
-    vkDestroySurfaceKHR(instance, surface, nullptr);
-    if (ENABLE_VALIDATION && debug_messenger_ != VK_NULL_HANDLE) {
-        auto fn = (PFN_vkDestroyDebugUtilsMessengerEXT)
-            vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
-        if (fn) fn(instance, debug_messenger_, nullptr);
-    }
-    vkDestroyInstance(instance, nullptr);
-}
+    VkFenceCreateInfo fci{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, nullptr, VK_FENCE_CREATE_SIGNALED_BIT };
+    vkCreateFence(device, &fci, nullptr, &readback_fence);
 
-void VulkanContext::recreate_swapchain(GLFWwindow* window) {
-    vkDeviceWaitIdle(device);
-    cleanup_swapchain();
     create_swapchain(window);
     create_swapchain_image_views();
 }
@@ -69,6 +53,13 @@ void VulkanContext::cleanup_swapchain() {
     swapchain_images.clear();
     vkDestroySwapchainKHR(device, swapchain, nullptr);
     swapchain = VK_NULL_HANDLE;
+}
+
+void VulkanContext::recreate_swapchain(GLFWwindow* window) {
+    vkDeviceWaitIdle(device);
+    cleanup_swapchain();
+    create_swapchain(window);
+    create_swapchain_image_views();
 }
 
 // ── Instance ──────────────────────────────────────────────────────────────────
@@ -504,6 +495,21 @@ void VulkanContext::destroy_image(Image& img) {
     if (img.handle != VK_NULL_HANDLE) vkDestroyImage(device, img.handle, nullptr);
     if (img.memory != VK_NULL_HANDLE) vkFreeMemory(device, img.memory, nullptr);
     img = {};
+}
+
+void VulkanContext::destroy() {
+    cleanup_swapchain();
+    vkDestroyCommandPool(device, cmd_pool, nullptr);
+    if (readback_fence != VK_NULL_HANDLE)
+        vkDestroyFence(device, readback_fence, nullptr);
+    vkDestroyDevice(device, nullptr);
+    vkDestroySurfaceKHR(instance, surface, nullptr);
+    if (ENABLE_VALIDATION && debug_messenger_ != VK_NULL_HANDLE) {
+        auto fn = (PFN_vkDestroyDebugUtilsMessengerEXT)
+            vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
+        if (fn) fn(instance, debug_messenger_, nullptr);
+    }
+    vkDestroyInstance(instance, nullptr);
 }
 
 // ── Command helpers ───────────────────────────────────────────────────────────

@@ -72,6 +72,8 @@ private:
     FrameData frames_[FRAMES_IN_FLIGHT]{};
     uint32_t  current_frame_ = 0;
 
+    VkCommandBuffer signal_cmd_ = VK_NULL_HANDLE; // empty cmd buffer that signals readback_fence
+
     void create_render_pass(VulkanContext& ctx);
     void create_framebuffers(VulkanContext& ctx);
     void create_quad_pipeline(VulkanContext& ctx,

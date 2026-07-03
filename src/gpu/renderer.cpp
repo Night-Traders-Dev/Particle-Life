@@ -290,8 +290,8 @@ void Renderer::create_sync_objects(VulkanContext& ctx) {
     alloc.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     alloc.commandPool        = ctx.cmd_pool;
     alloc.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    alloc.commandBufferCount = FRAMES_IN_FLIGHT;
-    VkCommandBuffer cmds[FRAMES_IN_FLIGHT];
+    alloc.commandBufferCount = FRAMES_IN_FLIGHT + 1;
+    VkCommandBuffer cmds[FRAMES_IN_FLIGHT + 1];
     VK_CHECK(vkAllocateCommandBuffers(ctx.device, &alloc, cmds));
 
     VkSemaphoreCreateInfo sem_ci{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, nullptr, 0 };
@@ -303,6 +303,12 @@ void Renderer::create_sync_objects(VulkanContext& ctx) {
         VK_CHECK(vkCreateSemaphore(ctx.device, &sem_ci, nullptr, &frames_[i].render_finished));
         VK_CHECK(vkCreateFence(ctx.device, &fen_ci, nullptr, &frames_[i].in_flight));
     }
+    signal_cmd_ = cmds[FRAMES_IN_FLIGHT];
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    vkBeginCommandBuffer(signal_cmd_, &begin);
+    vkEndCommandBuffer(signal_cmd_);
 }
 
 // ── ImGui ─────────────────────────────────────────────────────────────────────
@@ -369,16 +375,16 @@ void Renderer::init_imgui(VulkanContext& ctx, GLFWwindow* window) {
 // ── Main draw frame ───────────────────────────────────────────────────────────
 
 bool Renderer::draw_frame(VulkanContext& ctx,
-                          ComputePipeline& compute,
-                          bool sim_active,
-                          SimConfig& cfg,
-                          Particles& particles,
-                          OrganismManager& org_manager,
-                          float day_night_factor,
-                          float compute_dt,
-                          float time_seconds,
-                          glm::vec2 wind,
-                          uint32_t extra_effect_flags)
+                           ComputePipeline& compute,
+                           bool sim_active,
+                           SimConfig& cfg,
+                           Particles& particles,
+                           OrganismManager& org_manager,
+                           float day_night_factor,
+                           float compute_dt,
+                           float time_seconds,
+                           glm::vec2 wind,
+                           uint32_t extra_effect_flags)
 {
     (void)sim_active;
     FrameData& frame = frames_[current_frame_];
