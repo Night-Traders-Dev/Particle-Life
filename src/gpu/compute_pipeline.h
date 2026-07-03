@@ -119,6 +119,10 @@ private:
     Buffer signal_grid_buffer_{};
     Buffer terrain_grid_buffer_{};
 
+    // Memory map (per-particle persistent signal memory, double-buffered)
+    Buffer memory_map_buffer_a_{};
+    Buffer memory_map_buffer_b_{};
+
     // Spatial Grid buffers
     Buffer grid_offsets_buffer_{};
     Buffer grid_counts_buffer_{};
@@ -147,8 +151,9 @@ private:
     // 15: grid offsets, 16: sorted indices, 17: conversion matrix,
     // 18: bloom_lo (storage image), 19: bloom_blur (storage image),
     // 20: composite_tex (storage image), 21: halo buffer, 22: energy modifiers,
-    // 23: genome in, 24: genome out, 25: signal grid, 26: terrain grid
-    static constexpr uint32_t NUM_BINDINGS = 27;
+    // 23: genome in, 24: genome out, 25: signal grid, 26: terrain grid,
+    // 27: memory map in, 28: memory map out
+    static constexpr uint32_t NUM_BINDINGS = 29;
 
     void create_descriptor_set_layout(VkDevice device);
     void create_pipeline_layout(VkDevice device);

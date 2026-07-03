@@ -22,6 +22,16 @@ ImVec4 Interface::force_to_color(float f) {
     return { c.r, c.g, c.b, 1.0f };
 }
 
+float Interface::simpson_diversity(const uint32_t* type_counts, uint32_t num_types, uint32_t total) {
+    if (total == 0) return 0.0f;
+    float sum = 0.0f;
+    for (uint32_t i = 0; i < num_types; ++i) {
+        float p = (float)type_counts[i] / (float)total;
+        sum += p * p;
+    }
+    return 1.0f - sum;
+}
+
 void Interface::render_imgui(SimConfig&       cfg,
                               Particles&       particles,
                               OrganismManager& org_manager,
@@ -549,6 +559,11 @@ void Interface::draw_metrics_window(SimConfig& cfg, Particles& particles, Organi
                 death_count_history[history_head] = (delta < 0) ? (float)(-delta) : 0.0f;
                 prev_particle_count = cur;
 
+                // Ecosystem metrics
+                diversity_history[history_head] = current_diversity;
+                energy_flux_history[history_head] = current_energy_flux;
+                trophic_efficiency_history[history_head] = current_trophic_efficiency;
+
                 history_head = (history_head + 1) % HISTORY_LEN;
             }
 
@@ -666,6 +681,38 @@ void Interface::draw_metrics_window(SimConfig& cfg, Particles& particles, Organi
                     ImGui::Text("No particles");
                 }
                 ImGui::Dummy(ImVec2(0, radius * 2.0f + 20.0f));
+            }
+
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Ecosystem")) {
+            ImGui::Text("Simpson's Diversity Index: %.4f", current_diversity);
+            ImGui::Text("Energy Flux: %.2f/s", current_energy_flux);
+            ImGui::Text("Trophic Efficiency: %.2f", current_trophic_efficiency);
+
+            // Diversity over time
+            ImGui::PlotLines("Diversity", diversity_history, HISTORY_LEN, history_head,
+                             nullptr, 0.0f, 1.0f, ImVec2(0, 60));
+            ImGui::PlotLines("Energy Flux", energy_flux_history, HISTORY_LEN, history_head,
+                             nullptr, -10.0f, 10.0f, ImVec2(0, 60));
+
+            // Per-Type Metrics
+            ImGui::SeparatorText("Per-Type Metrics");
+            float type_count_f[MAX_PARTICLE_TYPES] = {};
+            size_t n = particles.positions.size();
+            for (size_t i = 0; i < n; ++i) {
+                if (particles.types[i] < MAX_PARTICLE_TYPES)
+                    type_count_f[particles.types[i]] += 1.0f;
+            }
+            for (uint32_t t = 0; t < cfg.particle_types; ++t) {
+                const glm::vec4& c = particles.colors[t];
+                ImGui::ColorButton("##tc", ImVec4(c.r, c.g, c.b, 1.0f), ImGuiColorEditFlags_NoTooltip, ImVec2(12, 12));
+                ImGui::SameLine();
+                float pct = type_count_f[t] / (float)std::max(1.0f, (float)cfg.particle_count) * 100.0f;
+                ImGui::Text("T%u: %.0f (%.1f%%)  Gen: %.1f", t,
+                            type_count_f[t], pct,
+                            generation_history[t][history_head > 0 ? history_head - 1 : HISTORY_LEN - 1]);
             }
 
             ImGui::EndTabItem();

@@ -17,6 +17,10 @@ void OrganismManager::reset() {
     organisms.clear();
     prev_organisms_.clear();
     next_id_ = 1;
+    species_records = {};
+    multicell_organism_count = 0;
+    parasite_records.clear();
+    for (auto& p : prev_type_populations_) p = 0;
 }
 
 // ── Clustering: spatial hash + union-find ──────────────────────────────────────
@@ -112,7 +116,8 @@ void OrganismManager::update(
     const std::vector<glm::vec2>& positions,
     const std::vector<glm::vec2>& velocities,
     const std::vector<uint32_t>&  types,
-    Particles& particles)
+    Particles& particles,
+    SimConfig* cfg)
 {
     uint32_t n = static_cast<uint32_t>(positions.size());
     if (n == 0) { organisms.clear(); return; }
@@ -308,4 +313,167 @@ void OrganismManager::update(
     }
 
     apply_trait_feedback(particles);
+
+    // Speciation & parasite tracking when config is available
+    if (cfg) {
+        check_speciation(particles, *cfg);
+        update_parasite_records(types, cfg->particle_types);
+    }
+}
+
+// ── Speciation ────────────────────────────────────────────────────────────────
+
+void OrganismManager::check_speciation(Particles& particles, SimConfig&) {
+    uint32_t n = static_cast<uint32_t>(particles.types.size());
+    if (n == 0) return;
+
+    // Count particles per type
+    uint32_t type_pop[MAX_PARTICLE_TYPES] = {};
+    for (uint32_t t : particles.types) {
+        if (t < MAX_PARTICLE_TYPES) type_pop[t]++;
+    }
+
+    // Compute proxy genome values per type from organism data.
+    // Since real genome (self_mod/cross_mod) is GPU-only, we use the
+    // within-organism type composition as a proxy for genomic expression.
+    float avg_self_mod_proxy[MAX_PARTICLE_TYPES] = {};
+    float avg_cross_mod_proxy[MAX_PARTICLE_TYPES] = {};
+    uint32_t type_organism_count[MAX_PARTICLE_TYPES] = {};
+
+    for (const auto& org : organisms) {
+        uint32_t dt = org.traits.dominant_type;
+        if (dt >= MAX_PARTICLE_TYPES) continue;
+        type_organism_count[dt]++;
+        float total = static_cast<float>(org.traits.size);
+        if (total > 0.0f) {
+            float self_ratio = static_cast<float>(org.traits.type_counts[dt]) / total;
+            avg_self_mod_proxy[dt] += self_ratio;
+            avg_cross_mod_proxy[dt] += 1.0f - self_ratio;
+        }
+    }
+
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+        if (type_organism_count[t] > 0) {
+            float inv = 1.0f / static_cast<float>(type_organism_count[t]);
+            avg_self_mod_proxy[t] *= inv;
+            avg_cross_mod_proxy[t] *= inv;
+        } else {
+            avg_self_mod_proxy[t] = species_records[t].avg_self_mod;
+            avg_cross_mod_proxy[t] = species_records[t].avg_cross_mod;
+        }
+    }
+
+    // Find the most diverged type
+    float max_divergence = 0.0f;
+    uint32_t most_diverged_type = UINT32_MAX;
+
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+        if (type_pop[t] == 0) continue;
+        if (t == FOOD_TYPE_INDEX) continue; // food never speciates
+
+        float self_div = 0.0f;
+        if (species_records[t].avg_self_mod > 0.001f) {
+            self_div = std::abs(avg_self_mod_proxy[t] - species_records[t].avg_self_mod)
+                       / species_records[t].avg_self_mod;
+        }
+        float cross_div = 0.0f;
+        if (species_records[t].avg_cross_mod > 0.001f) {
+            cross_div = std::abs(avg_cross_mod_proxy[t] - species_records[t].avg_cross_mod)
+                        / species_records[t].avg_cross_mod;
+        }
+        float div = std::max(self_div, cross_div);
+        species_records[t].divergence = div;
+
+        if (div > max_divergence && div > 0.4f) {
+            max_divergence = div;
+            most_diverged_type = t;
+        }
+    }
+
+    // Count unique types in use (excluding food)
+    uint32_t types_in_use = 0;
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+        if (t != FOOD_TYPE_INDEX && type_pop[t] > 0) types_in_use++;
+    }
+
+    if (most_diverged_type == UINT32_MAX) return;
+    if (types_in_use >= MAX_PARTICLE_TYPES - 1) return; // reserve one slot
+
+    // Find unused type index (skip FOOD_TYPE_INDEX)
+    uint32_t new_type = UINT32_MAX;
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+        if (t == FOOD_TYPE_INDEX) continue;
+        if (type_pop[t] == 0) {
+            new_type = t;
+            break;
+        }
+    }
+    if (new_type == UINT32_MAX) return;
+
+    // Split: reassign particles of the diverged type to the new type
+    for (auto& org : organisms) {
+        for (uint32_t idx : org.particle_indices) {
+            if (idx < particles.types.size() && particles.types[idx] == most_diverged_type) {
+                particles.types[idx] = new_type;
+            }
+        }
+    }
+
+    // Initialize species record for the new type
+    species_records[new_type].avg_self_mod  = avg_self_mod_proxy[most_diverged_type];
+    species_records[new_type].avg_cross_mod = avg_cross_mod_proxy[most_diverged_type];
+    species_records[new_type].divergence    = 0.0f;
+
+    // Reset divergence on parent
+    species_records[most_diverged_type].divergence = 0.0f;
+}
+
+// ── Parasite co-evolution tracking ────────────────────────────────────────────
+
+void OrganismManager::update_parasite_records(
+    const std::vector<uint32_t>& types,
+    uint32_t particle_types)
+{
+    if (particle_types == 0 || particle_types > MAX_PARTICLE_TYPES)
+        particle_types = MAX_PARTICLE_TYPES;
+
+    // Count particles per type
+    uint32_t type_count[MAX_PARTICLE_TYPES] = {};
+    for (uint32_t t : types) {
+        if (t < MAX_PARTICLE_TYPES) type_count[t]++;
+    }
+
+    // Update existing parasite records
+    for (auto& pr : parasite_records) {
+        if (pr.type >= particle_types) continue;
+
+        uint32_t curr = type_count[pr.type];
+        uint32_t prev = (pr.type < MAX_PARTICLE_TYPES) ? prev_type_populations_[pr.type] : 0;
+
+        if (curr > prev) {
+            // Population grew — strengthen infectivity
+            pr.infectivity = std::min(pr.infectivity + 0.05f, 1.0f);
+        }
+        pr.coevolution_score = pr.infectivity * pr.resistance;
+    }
+
+    // Add new records for types not yet tracked
+    for (uint32_t t = 0; t < particle_types; ++t) {
+        if (type_count[t] == 0) continue;
+
+        bool found = false;
+        for (const auto& pr : parasite_records) {
+            if (pr.type == t) { found = true; break; }
+        }
+        if (!found) {
+            ParasiteRecord nr;
+            nr.type = t;
+            parasite_records.push_back(nr);
+        }
+    }
+
+    // Update previous populations for next frame
+    for (uint32_t t = 0; t < particle_types; ++t) {
+        prev_type_populations_[t] = type_count[t];
+    }
 }

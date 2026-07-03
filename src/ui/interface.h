@@ -72,6 +72,20 @@ public:
     int   frame_counter = 0;
     uint32_t prev_particle_count = 0;
 
+    // Ecosystem health metrics (rolling 300-frame buffers)
+    float diversity_history[300] = {};
+    float energy_flux_history[300] = {};
+    float trophic_efficiency_history[300] = {};
+
+    // Current values (updated by simulation each frame)
+    float current_diversity = 1.0f;
+    float current_energy_flux = 0.0f;
+    float current_trophic_efficiency = 1.0f;
+    uint32_t prev_type_counts[MAX_PARTICLE_TYPES] = {};
+    uint32_t prev_deaths = 0;
+
+    float simpson_diversity(const uint32_t* type_counts, uint32_t num_types, uint32_t total);
+
     // Initialise with a random seed
     void init();
 

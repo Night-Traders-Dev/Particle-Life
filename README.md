@@ -1,9 +1,10 @@
 # Particle Life
 
-A GPU-accelerated particle life simulation with biologically-inspired emergent behaviour.
-Thousands of particles interact through configurable force matrices, self-organise into
-organisms, and exhibit specialised behaviour through typed archetypes — complete with
-ecological dynamics, real-time analytics, and a day/night cycle.
+A GPU-accelerated particle life simulation with biologically-inspired emergent behaviour,
+evolution, and ecosystem dynamics. Thousands of particles interact through configurable
+force matrices, self-organise into organisms, speciate when their genome diverges, and
+exhibit specialised behaviour through typed archetypes — complete with live weather,
+predator-prey dynamics, seasonal migration, niche construction, and real-time analytics.
 
 Written in C++20 with Vulkan compute shaders and Dear ImGui.
 
@@ -13,17 +14,34 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
 
 ### Ecological Simulation
 - **Mitosis / Reproduction:** High-energy particles (> 1.5) can reproduce — dead particle slots are recycled by spawning near a thriving parent, inheriting its type and momentum
+- **Energy Inheritance:** Offspring inherit ~40% of parent energy at birth — parents pay an energy cost (0.3 for non-food, 0.1 for food)
+- **Seed Dispersal:** Offspring scatter at 4–34× radius in random direction, preventing overcrowding and encouraging territory spread
 - **Corpse Decay:** Dead particles convert into static food corpses (type 9) where they die, returning organic matter to the ecosystem
 - **Food Decomposition:** Uneaten food slowly decays over time, preventing infinite accumulation
-- **Energy Metabolism:** All particles consume energy over time; feeding (proximity to attractive particles) replenishes it
+- **Per-type Metabolism:** Each particle type drains energy at a different rate (type 0 = 0.5×, type 8 = 2.0×), creating energy-budget specialization
 - **Natural Selection:** Types that feed efficiently and reproduce outcompete others organically
 
+### Predator-Prey Dynamics
+- **Predator Pursuit:** PREDATOR-flagged particles actively steer toward nearby prey in addition to force-matrix interactions
+- **Prey Conversion:** Predators convert nearby prey on contact, gaining energy reward (0.3)
+- **Food Web:** Energy flows from food (type 9) → herbivores → predators through feeding and conversion chains
+- **Co-evolution:** Parasite–host arms race tracked via infectivity and resistance scores across generations
+
+### Speciation & Evolution
+- **Speciation:** When a type's genome (self_mod/cross_mod expression) diverges 40%+ from baseline, the population can split into a new type slot — true evolution in real time
+- **Heritable Traits:** self_mod, cross_mod, and lifespan mutate during reproduction (±15% on trait values)
+- **Behavior Flag Mutation:** Small chance (2%) for offspring to gain/lose a random behavior flag, enabling drift adaptation
+- **Generation Tracking:** Each mitosis increments the generation counter; average generation displayed in HUD
+
 ### Physics Engine
-- Up to ~25,000+ particles simulated in real time on the GPU
+- Up to ~50,000+ particles simulated in real time on the GPU
 - **Spatial Hash Grid:** O(n) neighbour lookups via a GPU-side grid (60-unit cells) with prefix-sum sorting
+- **Hard-Sphere Collision:** Position correction + velocity bounce when particles overlap (prevents phasing)
+- **Flocking / Schooling:** FLOCKING-flagged particles align velocity with nearby same-type neighbors (boids alignment term)
+- **Per-type Radius:** Each type has an independent base radius — "whales" and "plankton" coexist visually and physically
 - **Brownian Motion:** Temperature-dependent thermal noise — particles jitter more during daytime, less at night
 - **Fluid Viscosity:** Density-dependent Stokes drag — dense clusters experience higher resistance
-- Configurable repulsion radius, interaction radius, dampening, and density limiting
+- Configurable repulsion radius, interaction radius, dampening, density limiting, and per-type radii
 - Double-buffered ping-pong position/velocity buffers for data-race-free updates
 
 ### Day/Night Cycle
@@ -35,10 +53,10 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
 - Status bar shows current time, phase, and temperature (°C / °F)
 
 ### Live Weather
-- **Auto-detects your location** via IP geolocation on startup (ip-api.com, no API key)
+- **Auto-detects your location** via IP geolocation on startup (ip-api.com, no API key), default ZIP 41101 (Ashland, KY)
 - **Manual ZIP code entry** — type your ZIP in the settings panel and click "Set" to override location
-- **Live conditions** fetched from Open-Meteo API every 10 minutes (free, no API key):
-  - Temperature affects particle mortality
+- **Live conditions** fetched from Open-Meteo API every 60 seconds (free, no API key, non-blocking async):
+  - Temperature affects particle metabolism and seasonal migration
   - Cloud cover dims the day/night lighting
   - Wind speed/direction applies a global directional force to all particles
   - Weather label shown in status bar (Clear / Cloudy / Foggy / Drizzle / Rain / Snow / Storm)
@@ -47,6 +65,29 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
 - Real-time wind from weather data applied as a uniform directional force on all particles
 - Wind strength and direction update with each weather fetch
 - Particles drift downwind, adding dynamic environmental pressure to the ecosystem
+
+### Metamorphosis
+- Per-type metamorphosis age threshold: when a particle's age exceeds the threshold, it transforms into a target type
+- Models life-cycle transitions: larva → adult, trophic mode switching, or developmental stages
+
+### Kin Recognition & Altruism
+- Per-type kin sharing parameter: particles share a fraction of their energy with nearby same-type neighbors
+- Creates cooperative clusters and emergent multicellular-like behaviour through resource pooling
+
+### Seasonal Migration
+- MIGRATOR-flagged particles seek their preferred temperature band (latitude on the y-axis)
+- Type 0 prefers cold (northern regions), type 8 prefers heat (southern regions)
+- Nudging force intensifies during extreme temperatures, driving seasonal movement
+
+### Memory Map & Chemotaxis
+- Each particle carries a persistent memory of the chemical signal at its location
+- Particles seek areas where signal strength is improving and explore randomly when trapped in low-signal zones
+- Memory decays over time, balancing exploration vs exploitation
+
+### Niche Construction
+- Particles modify their environment over time: high-traffic corridors erode terrain, dense feeding grounds accumulate organic deposits
+- Terrain changes every ~20 seconds based on particle density patterns
+- Creates feedback loops: terrain shapes behaviour, behaviour shapes terrain
 
 ### Force Matrix & Grid
 - Up to 10 particle types, each pair with an independent attraction/repulsion scalar
@@ -74,6 +115,8 @@ Selectable behaviours per type:
 | **Proton** | `HEAVY + POSITIVE` | Heavy particle with positive charge |
 | **Electron** | `NEGATIVE` | Light particle with negative charge |
 | **Food** | `FOOD` | Static energy source consumed by other particles |
+| **Flocker** | `FLOCKING` | Aligns velocity with nearby same-type neighbours (boids) |
+| **Migrator** | `MIGRATOR` | Seeks preferred temperature band (seasonal latitude movement) |
 
 ### Visual Enhancements
 - **Energy-based sizing:** High-energy particles grow larger, starving ones shrink
@@ -93,10 +136,19 @@ Click the status bar's particle/organism counter to open the **Metrics Explorer*
   - Average particle speed
   - Organism count over time
   - Birth/death rate estimates
+  - Per-type generation trends
+- **Ecosystem Tab:** Health metrics:
+  - Simpson's Diversity Index
+  - Energy flux (energy change per frame)
+  - Trophic efficiency ratio
+  - Per-type population percentages with generation averages
 
 ### Interaction & Inspection
 - **Interactive Hover:** Hover over any particle to see its type, conversion history, and age
 - **Organism Inspection:** Hover popup shows organism composition and metrics
+- **Particle Selection:** Right-click selects nearest particle for detailed inspection (type, energy, age, organism)
+- **Trait Display Mode (T):** Toggle to colour particles by self_mod value (blue=0.3, red=2.0)
+- **Colour Palettes (P/B/N/M):** Cycle through viridis, plasma, magma, inferno colormaps
 - **Simulation Control:**
 - **Time Scaling:** Dynamic speed adjustment (0.0x–10.0x)
 - **Autospawn Toggle:** Enable/disable periodic food spawning

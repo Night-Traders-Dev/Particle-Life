@@ -55,6 +55,10 @@ layout(set = 0, binding = 25, std430) buffer SignalGrid { float data[]; } signal
 // Terrain obstacle grid (CHEM_W x CHEM_H, 0.0 = free, 1.0 = solid obstacle)
 layout(set = 0, binding = 26, std430) buffer TerrainGrid { float data[]; } terrain_grid;
 
+// Memory map (per-particle persistent signal memory, vec2 = position + value)
+layout(set = 0, binding = 27, std430) buffer MemoryMap { vec2 data[]; } memory_map;
+layout(set = 0, binding = 28, std430) buffer MemoryMapOut { vec2 data[]; } memory_map_out;
+
 // Push constants
 layout(push_constant, std430) uniform Params {
     vec2  region_size;        //   0
@@ -86,6 +90,14 @@ layout(push_constant, std430) uniform Params {
     float wind_y;             // 148
     uint terrain_obstacle_count; // 152
     float current_temperature; // 156
+    float type_radius[10];           // 160
+    float type_metabolic_rate[10];   // 200
+    float type_metamorph_age[10];    // 240
+    int   type_metamorph_target[10]; // 280
+    uint  type_flocking_enabled;     // 320
+    float type_kin_share[10];        // 324
+    float memory_decay;              // 364
+    float memory_strength;           // 368
 } params;
 
 // Behavior flag constants (must match ParticleBehavior enum in types.h)
@@ -101,6 +113,8 @@ const uint BEHAVIOR_NEGATIVE = 256u;
 const uint BEHAVIOR_FOOD     = 512u;
 const uint BEHAVIOR_PREDATOR = 1024u;
 const uint BEHAVIOR_SIGNALER = 2048u;
+const uint BEHAVIOR_FLOCKING = 4096u;
+const uint BEHAVIOR_MIGRATOR = 8192u;
 
 const uint CHEM_W = 320u;
 const uint CHEM_H = 180u;
@@ -250,6 +264,12 @@ void apply_physics(uint i) {
                     else
                         local_density += proximity * 0.5f;
 
+                    // Flocking: align velocity with nearby same-type particles
+                    if ((flags_a & BEHAVIOR_FLOCKING) != 0u && type_a == type_b) {
+                        vec2 vel_b = in_vel_buffer.data[j];
+                        total_force += (vel_b - vel_a) * 0.02f * proximity;
+                    }
+
                     float attraction = force_buffer.data[type_a + type_b * params.particle_types];
                     
                     // Heritable trait modulation
@@ -315,10 +335,24 @@ void apply_physics(uint i) {
                             atomicAdd(energy_out_buffer.data[j], -drain);
                         }
                     }
+                    // Predator pursuit: steer toward nearest prey
+                    if (is_predator && !is_food && (flags_b & BEHAVIOR_FOOD) == 0u && (flags_b & BEHAVIOR_PREDATOR) == 0u) {
+                        float pursuit_force = 15.0f * proximity * params.dt;
+                        total_force += normal * pursuit_force;
+                    }
                     // Energy drain (Leech)
                     if (is_leech && !((flags_b & BEHAVIOR_SHIELD) != 0u)) {
                         float drain = proximity * 0.1f * params.dt;
                         energy_gain += drain;
+                    }
+
+                    // Kin recognition: share energy with same-type neighbors
+                    if (params.type_kin_share[type_a] > 0.0f && type_a == type_b && energy_a > 0.3f) {
+                        float share = params.type_kin_share[type_a] * 0.05f * params.dt;
+                        if (energy_a > share) {
+                            energy_a -= share * 0.5f;
+                            atomicAdd(energy_out_buffer.data[j], share * 0.5f);
+                        }
                     }
 
                     // REPEL: override force matrix — always push away
@@ -371,7 +405,8 @@ void apply_physics(uint i) {
                     total_force += normal * force * -50.0f;
 
                     // Hard-sphere collision: prevent particles from overlapping
-                    float sphere_d = params.radius * 2.0f;
+                    float base_r = max(params.type_radius[type_a], 0.5f);
+                    float sphere_d = base_r * 2.0f;
                     if (dist < sphere_d) {
                         float overlap = sphere_d - dist;
                         // Position correction (split the overlap equally)
@@ -430,25 +465,42 @@ void apply_physics(uint i) {
     }
 
     // Signal gradient following (all particles are attracted to signals)
+    float current_signal = 0.0f;
     if (!is_food && !is_predator) {
         float tx = (pos_a.x / params.region_size.x + 0.5f) * float(CHEM_W);
         float ty = (pos_a.y / params.region_size.y + 0.5f) * float(CHEM_H);
         uint ux = uint(clamp(floor(tx), 0.0f, float(CHEM_W - 1u)));
         uint uy = uint(clamp(floor(ty), 0.0f, float(CHEM_H - 1u)));
-        float c = signal_grid.data[ux + uy * CHEM_W];
-        if (c > 0.1f) {
+        current_signal = signal_grid.data[ux + uy * CHEM_W];
+        if (current_signal > 0.1f) {
             // Compute gradient via finite differences
-            float cx = ux + 1u < CHEM_W ? signal_grid.data[(ux + 1u) + uy * CHEM_W] : c;
-            float cy = uy + 1u < CHEM_H ? signal_grid.data[ux + (uy + 1u) * CHEM_W] : c;
-            float gx = (cx - c) * CHEM_W / params.region_size.x;
-            float gy = (cy - c) * CHEM_H / params.region_size.y;
+            float cx = ux + 1u < CHEM_W ? signal_grid.data[(ux + 1u) + uy * CHEM_W] : current_signal;
+            float cy = uy + 1u < CHEM_H ? signal_grid.data[ux + (uy + 1u) * CHEM_W] : current_signal;
+            float gx = (cx - current_signal) * CHEM_W / params.region_size.x;
+            float gy = (cy - current_signal) * CHEM_H / params.region_size.y;
             vec2 grad = vec2(gx, gy);
             float gl = length(grad);
             if (gl > 0.0001f) {
-                total_force += normalize(grad) * c * 10.0f; // follow gradient up
+                total_force += normalize(grad) * current_signal * 10.0f; // follow gradient up
             }
         }
     }
+
+    // Memory map: particle remembers last signal value and seeks areas of improvement
+    vec2 mem = memory_map.data[i];
+    float mem_signal = mem.x;
+    float mem_age = mem.y;
+    mem_age += params.dt;
+    if (current_signal > mem_signal + 0.01f && mem_age > 1.0f) {
+        mem.x = current_signal;
+        mem.y = 0.0f;
+    } else if (current_signal < mem_signal * 0.5f && mem_age > 5.0f) {
+        total_force += (random2(float(i) + params.time_seconds + 100.0f) - 0.5f) * params.memory_strength;
+        mem.x = current_signal;
+        mem.y = 0.0f;
+    }
+    mem.x = mix(mem.x, current_signal, params.memory_decay * params.dt);
+    memory_map_out.data[i] = mem;
 
     // Brownian motion (thermal jitter) based on day_night_factor and age
     float temp_factor = params.day_night_factor * vitality;
@@ -483,10 +535,21 @@ void apply_physics(uint i) {
 
     // Metabolism & Natural Decay
     if (!is_food) {
-        energy_a -= params.metabolism * params.dt;
+        float metab = params.type_metabolic_rate[type_a] > 0.0f ? params.type_metabolic_rate[type_a] : params.metabolism;
+        energy_a -= metab * params.dt;
     } else {
         energy_a -= params.metabolism * 0.2f * params.dt;
     }
+
+    // Metamorphosis: change type at age threshold
+    if (!is_food && params.type_metamorph_age[type_a] > 0.0f && age >= params.type_metamorph_age[type_a]) {
+        int target = params.type_metamorph_target[type_a];
+        if (target >= 0 && target < int(params.particle_types)) {
+            type_buffer.data[i] = uint(target);
+            age = 0.0f;
+        }
+    }
+
     energy_a += energy_gain;
     energy_a = clamp(energy_a, 0.0f, 2.0f);
 
@@ -549,7 +612,7 @@ void apply_physics(uint i) {
                         energy_a = 0.6f;
                     } else {
                         type_buffer.data[i] = parent_type;
-                        energy_a = 1.0f;
+                        energy_a = max(parent_energy * 0.4f, 0.2f);
                     }
 
                     // Heritable trait mutation (inherit from parent with variation)
@@ -638,7 +701,8 @@ void render_particle(uint i) {
     vec2  viewport_center = vec2(1280.0, 720.0);
     float energy_scale = mix(0.4f, 1.6f, clamp(energy, 0.0f, 2.0f) * 0.5f);
     float age_size = mix(1.4f, 0.6f, age_ratio); // young = big, old = small
-    float radius = params.radius * params.camera_zoom * energy_scale * age_size;
+    float type_r = max(params.type_radius[type], 0.5f);
+    float radius = type_r * params.camera_zoom * energy_scale * age_size;
 
     bool is_food_particle = (type == 9u);
     if (is_food_particle) {

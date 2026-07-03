@@ -64,6 +64,8 @@ private:
 
     void generate_terrain();
     void spawn_seasonal_food();
+    void update_seasonal_migration();
+    void update_niche_construction();
     void save_screenshot();
     static bool http_fetch_sync(const std::string& url, std::string& result);
     float extract_json_float(const std::string& json, const std::string& key);
@@ -79,6 +81,7 @@ private:
 
     // Organism tracking
     int                    organism_tick_counter_ = 0;
+    int                    niche_tick_counter_ = 0;
     std::vector<glm::vec2> readback_positions_;
     std::vector<glm::vec2> readback_velocities_;
     std::vector<uint32_t>  readback_types_;

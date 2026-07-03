@@ -47,6 +47,7 @@ enum ParticleBehavior : uint32_t {
     BEHAVIOR_ENERGY_SAVER = 1u << 10, // Reduced energy consumption
     BEHAVIOR_PREDATOR = 1u << 11, // Actively hunts and converts prey
     BEHAVIOR_SIGNALER = 1u << 12, // Emits chemical signals
+    BEHAVIOR_MIGRATOR = 1u << 13, // Seeks preferred temperature band
 };
 
 static constexpr float DEFAULT_LIFESPAN  = 300.0f;
@@ -113,8 +114,16 @@ struct PushConstants {
     float     wind_y;              // 148 – 151
     uint32_t  terrain_obstacle_count; // 152 – 155  (0 = skip obstacle checks)
     float     current_temperature; // 156 – 159
+    float     type_radius[MAX_PARTICLE_TYPES];        // 160 – 199  (per-type base radius)
+    float     type_metabolic_rate[MAX_PARTICLE_TYPES]; // 200 – 239  (per-type energy drain, -1.0 = use global metabolism)
+    float     type_metamorph_age[MAX_PARTICLE_TYPES];  // 240 – 279  (age at which type changes, 0 = no metamorphosis)
+    int32_t   type_metamorph_target[MAX_PARTICLE_TYPES]; // 280 – 319  (type to change into at metamorph age)
+    uint32_t  type_flocking_enabled;    // 320  bitmask per type for flocking
+    float     type_kin_share[MAX_PARTICLE_TYPES];      // 324 – 363  (fraction of energy shared with same-type neighbors)
+    float     memory_decay;             // 364  (decay rate for particle memory map)
+    float     memory_strength;          // 368  (strength of memory-guided force)
 };
-static_assert(sizeof(PushConstants) == 160, "PushConstants layout mismatch");
+static_assert(sizeof(PushConstants) == 372, "PushConstants layout mismatch");
 
 // Effect flag bits (must match shader)
 static constexpr uint32_t EFFECT_TRAILS   = 1u << 0;
@@ -122,6 +131,8 @@ static constexpr uint32_t EFFECT_BLOOM    = 1u << 1;
 static constexpr uint32_t EFFECT_VIGNETTE = 1u << 2;
 static constexpr uint32_t EFFECT_HALOS    = 1u << 3;
 static constexpr uint32_t EFFECT_TRAIT_DISPLAY = 1u << 4; // T key: show self_mod as color
+static constexpr uint32_t EFFECT_MEMORY_MAP   = 1u << 5; // memory-guided force
+static constexpr uint32_t EFFECT_SPECTRAL_DISPLAY = 1u << 6; // show speciation status
 
 // ── Organism halo (uploaded each frame, std430-aligned) ──────────────────────
 

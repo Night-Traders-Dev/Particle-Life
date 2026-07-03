@@ -61,10 +61,33 @@ void Simulation::destroy() {
 void Simulation::reset() {
     vkDeviceWaitIdle(vk.device);
     particles.gen_data(cfg);
+
+    // Set per-type properties for diversity
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+        cfg.energy_depletion_rates[t] = 0.5f + (float)t / 8.0f * 1.5f;
+    }
+
+    // Set migrator flag on every other type (1, 3, 5, 7)
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+        if (t % 2 == 1 && t != FOOD_TYPE_INDEX) {
+            particles.behavior_flags[t] |= BEHAVIOR_MIGRATOR;
+        }
+    }
+
     compute.clear_buffers(vk);
     compute.create_buffers(vk, particles);
     organism_manager.reset();
+
+    // Initialize species records
+    for (uint32_t t = 0; t < cfg.particle_types; ++t) {
+        organism_manager.species_records[t] = {};
+        organism_manager.species_records[t].avg_self_mod = 0.8f + (float)t * 0.1f;
+        organism_manager.species_records[t].avg_cross_mod = 0.8f;
+        organism_manager.species_records[t].avg_lifespan = 300.0f;
+    }
+
     organism_tick_counter_ = 0;
+    niche_tick_counter_ = 0;
 }
 
     // ── Per-frame tick ────────────────────────────────────────────────────────────
@@ -248,6 +271,10 @@ void Simulation::tick(GLFWwindow* window, double dt) {
         if (iface.autospawn_enabled && organism_tick_counter_ % 1200 == 0)
             spawn_seasonal_food();
 
+        // Niche construction (every ~1200 frames)
+        if (readback_positions_.size() == cfg.particle_count)
+            update_niche_construction();
+
         // Organism detection (every N frames)
         if (organism_tick_counter_ % ORGANISM_UPDATE_INTERVAL == 0) {
             vkQueueWaitIdle(vk.queue);
@@ -258,7 +285,47 @@ void Simulation::tick(GLFWwindow* window, double dt) {
             particles.types = readback_types_;
             cached_positions_ = readback_positions_;
             organism_manager.update(readback_positions_, readback_velocities_,
-                                    particles.types, particles);
+                                    particles.types, particles, &cfg);
+
+            if (readback_positions_.size() == readback_types_.size())
+                update_seasonal_migration();
+
+            // Compute ecosystem health metrics from readback data
+            {
+                uint32_t type_counts[MAX_PARTICLE_TYPES] = {};
+                uint32_t total = 0;
+                for (uint32_t i = 0; i < readback_types_.size(); ++i) {
+                    uint32_t t = readback_types_[i];
+                    if (t < MAX_PARTICLE_TYPES) { type_counts[t]++; total++; }
+                }
+                iface.current_diversity = iface.simpson_diversity(type_counts, cfg.particle_types, total);
+
+                // Energy flux
+                float total_energy = 0.0f;
+                for (auto& p : particles.energy) total_energy += p;
+                int head = iface.history_head;
+                iface.total_energy_history[head] = total_energy;
+
+                int prev_head = (head == 0) ? iface.HISTORY_LEN - 1 : head - 1;
+                iface.current_energy_flux = total_energy - iface.total_energy_history[prev_head];
+
+                // Trophic efficiency: (prey deaths) / (predator energy)
+                uint32_t current_deaths = 0;
+                for (uint32_t i = 0; i < readback_types_.size(); ++i) {
+                    if (readback_types_[i] == FOOD_TYPE_INDEX && particles.types[i] != FOOD_TYPE_INDEX)
+                        current_deaths++;
+                }
+                uint32_t deaths_delta = (current_deaths >= iface.prev_deaths) ? current_deaths - iface.prev_deaths : 0;
+                iface.prev_deaths = current_deaths;
+                float pred_energy = 0.0f;
+                for (uint32_t i = 0; i < readback_types_.size(); ++i) {
+                    if (readback_types_[i] < MAX_PARTICLE_TYPES &&
+                        (particles.behavior_flags[readback_types_[i]] & BEHAVIOR_PREDATOR) != 0u)
+                        pred_energy += particles.energy[i];
+                }
+                iface.current_trophic_efficiency = (deaths_delta > 0 && pred_energy > 0.01f)
+                    ? (float)deaths_delta / pred_energy : 0.0f;
+            }
         }
     }
 }
@@ -580,31 +647,73 @@ std::string Simulation::extract_json_string(const std::string& json, const std::
     return json.substr(pos + 1, end - pos - 1);
 }
 
+// ── Perlin noise helpers ───────────────────────────────────────────────────────
+
+static float noise2d(int x, int y, int seed) {
+    int n = x + y * 57 + seed * 131;
+    n = (n << 13) ^ n;
+    return (float)(1.0 - ((n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff) / 1073741824.0);
+}
+
+static float smooth_noise(float x, float y, int seed) {
+    int ix = (int)floor(x);
+    int iy = (int)floor(y);
+    float fx = x - (float)ix;
+    float fy = y - (float)iy;
+    fx = fx * fx * (3.0f - 2.0f * fx);
+    fy = fy * fy * (3.0f - 2.0f * fy);
+    float v00 = noise2d(ix, iy, seed);
+    float v10 = noise2d(ix + 1, iy, seed);
+    float v01 = noise2d(ix, iy + 1, seed);
+    float v11 = noise2d(ix + 1, iy + 1, seed);
+    float v0 = v00 + (v10 - v00) * fx;
+    float v1 = v01 + (v11 - v01) * fx;
+    return v0 + (v1 - v0) * fy;
+}
+
+static float fbm(float x, float y, int octaves, int seed) {
+    float value = 0.0f, amp = 1.0f, freq = 1.0f, max_val = 0.0f;
+    for (int i = 0; i < octaves; ++i) {
+        value += amp * smooth_noise(x * freq, y * freq, seed + i * 100);
+        max_val += amp;
+        amp *= 0.5f;
+        freq *= 2.0f;
+    }
+    return value / max_val;
+}
+
 void Simulation::generate_terrain() {
     std::vector<float> grid(CHEM_W * CHEM_H, 0.0f);
-    std::mt19937 rng(42);
-    for (int o = 0; o < 12; ++o) {
+
+    // Perlin noise obstacles: threshold-based terrain
+    for (uint32_t y = 0; y < CHEM_H; ++y) {
+        for (uint32_t x = 0; x < CHEM_W; ++x) {
+            float nx = (float)x / (float)CHEM_W * 4.0f;
+            float ny = (float)y / (float)CHEM_H * 4.0f;
+            float noise = fbm(nx, ny, 4, 42);
+
+            // Create terrain features at different noise thresholds
+            if (noise > 0.65f) {
+                grid[x + y * CHEM_W] = 1.0f; // solid obstacle
+            } else if (noise > 0.55f) {
+                grid[x + y * CHEM_W] = 0.5f + (noise - 0.55f) * 5.0f; // gradient obstacle
+            }
+        }
+    }
+
+    // Add some circular clearings for visual interest
+    std::mt19937 rng(123);
+    for (int o = 0; o < 8; ++o) {
         float cx = (float)(rng() % CHEM_W);
         float cy = (float)(rng() % CHEM_H);
-        float r = 8.0f + (float)(rng() % 20);
+        float r = 15.0f + (float)(rng() % 15);
         for (uint32_t y = 0; y < CHEM_H; ++y)
             for (uint32_t x = 0; x < CHEM_W; ++x) {
                 float d = sqrt((float)((x - cx) * (x - cx) + (y - cy) * (y - cy)));
-                if (d < r) grid[x + y * CHEM_W] = std::max(grid[x + y * CHEM_W], 1.0f - d / r);
+                if (d < r) grid[x + y * CHEM_W] = 0.0f; // carve clearing
             }
     }
-    for (int w = 0; w < 6; ++w) {
-        int x1 = rng() % CHEM_W, y1 = rng() % CHEM_H;
-        int x2 = rng() % CHEM_W, y2 = rng() % CHEM_H;
-        int steps = std::max(abs(x2 - x1), abs(y2 - y1));
-        for (int s = 0; s <= steps; ++s) {
-            float t = steps > 0 ? (float)s / steps : 0.0f;
-            int x = (int)(x1 + (float)(x2 - x1) * t);
-            int y = (int)(y1 + (float)(y2 - y1) * t);
-            if (x >= 0 && x < (int)CHEM_W && y >= 0 && y < (int)CHEM_H)
-                grid[x + y * CHEM_W] = 1.0f;
-        }
-    }
+
     compute.upload_terrain(vk, grid.data());
 
     // Count obstacles for shader early-out
@@ -652,6 +761,65 @@ void Simulation::spawn_seasonal_food() {
         compute.resize_buffers(vk, particles);
     else
         compute.upload_particle_range(vk, particles, n, food_count);
+}
+
+void Simulation::update_seasonal_migration() {
+    // Migrator types seek their preferred temperature band by adjusting
+    // their movement bias toward warmer/colder regions.
+    // Temperature roughly maps to latitude (y-axis).
+    for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+        if (i >= readback_types_.size()) break;
+        uint32_t t = readback_types_[i];
+        if (t >= MAX_PARTICLE_TYPES) continue;
+        uint32_t flags = particles.behavior_flags[t];
+        if ((flags & BEHAVIOR_MIGRATOR) == 0) continue;
+
+        float world_y = readback_positions_[i].y;
+        float half_h = float(REGION_H) * 1.5f;
+
+        // Preferred temperature maps to preferred y-position
+        // Type 0 = cold-loving (north), Type 8 = heat-loving (south)
+        float preferred_band = ((float)t / 8.0f) * 2.0f - 1.0f; // -1 to 1
+        float target_y = preferred_band * half_h;
+
+        // Apply gentle nudging force proportional to distance from preferred band
+        float diff = target_y - world_y;
+        float force = diff * 0.0001f;
+
+        // Only apply if actual temperature differs
+        float temp = cfg.current_temperature;
+        if (temp > 25.0f && preferred_band < -0.3f) force *= 2.0f; // hot -> go north
+        if (temp < 10.0f && preferred_band > 0.3f) force *= 2.0f;  // cold -> go south
+
+        readback_positions_[i].y += force;
+    }
+}
+
+void Simulation::update_niche_construction() {
+    niche_tick_counter_++;
+    if (niche_tick_counter_ % 1200 != 0) return;
+
+    std::vector<float> terrain(CHEM_W * CHEM_H, 0.0f);
+
+    // Track particle density per chem cell
+    std::vector<uint32_t> cell_count(CHEM_W * CHEM_H, 0);
+    for (auto& pos : readback_positions_) {
+        float tx = (pos.x / (float(REGION_W) * 3.0f) + 0.5f) * float(CHEM_W);
+        float ty = (pos.y / (float(REGION_H) * 3.0f) + 0.5f) * float(CHEM_H);
+        uint32_t ux = std::min((uint32_t)std::max(0.0f, std::floor(tx)), CHEM_W - 1u);
+        uint32_t uy = std::min((uint32_t)std::max(0.0f, std::floor(ty)), CHEM_H - 1u);
+        cell_count[ux + uy * CHEM_W]++;
+    }
+
+    for (uint32_t i = 0; i < CHEM_W * CHEM_H; ++i) {
+        if (cell_count[i] > 50) {
+            terrain[i] = std::min(terrain[i] + 0.1f, 1.0f);
+        } else if (cell_count[i] > 20 && cell_count[i] < 50) {
+            terrain[i] = std::max(terrain[i] - 0.05f, 0.0f);
+        }
+    }
+
+    compute.upload_terrain(vk, terrain.data());
 }
 
 void Simulation::save_screenshot() {
