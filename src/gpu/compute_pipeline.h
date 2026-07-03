@@ -132,6 +132,9 @@ private:
     // Organism halo data (uploaded each frame from OrganismManager).
     Buffer halo_buffer_{};
 
+    // Per-particle organism membership (written CPU-side after readback, uploaded each frame)
+    Buffer organism_id_buffer_{};
+
     // Screenshot readback buffer
     Buffer screenshot_readback_buffer_{};
     bool   screenshot_readback_created_ = false;
@@ -152,8 +155,9 @@ private:
     // 18: bloom_lo (storage image), 19: bloom_blur (storage image),
     // 20: composite_tex (storage image), 21: halo buffer, 22: energy modifiers,
     // 23: genome in, 24: genome out, 25: signal grid, 26: terrain grid,
-    // 27: memory map in, 28: memory map out
-    static constexpr uint32_t NUM_BINDINGS = 29;
+    // 27: memory map in, 28: memory map out,
+    // 29: organism_id (read/write, per-particle uint)
+    static constexpr uint32_t NUM_BINDINGS = 30;
 
     void create_descriptor_set_layout(VkDevice device);
     void create_pipeline_layout(VkDevice device);

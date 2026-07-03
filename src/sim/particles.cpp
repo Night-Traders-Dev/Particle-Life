@@ -49,6 +49,7 @@ void Particles::gen_particles(const SimConfig& cfg) {
     angles.clear();
     angular_velocities.clear();
     stats.clear();
+    organism_ids.clear();
 
     // Spawn across a region 3× the viewport so particles have room to form
     // natural structures. The camera starts at (0,0) so the centre is always
@@ -62,6 +63,16 @@ void Particles::gen_particles(const SimConfig& cfg) {
 
     uint32_t count = cfg.particle_count;
 
+    // Weighted trophic distribution: 50% plants, 30% herbivores, 20% predators
+    uint32_t type_weights[MAX_PARTICLE_TYPES] = {};
+    uint32_t total_weight = 0;
+    for (uint32_t t = 0; t < cfg.particle_types && t < MAX_PARTICLE_TYPES; ++t) {
+        if (t < 3)       type_weights[t] = 5;  // plants
+        else if (t < 6)  type_weights[t] = 3;  // herbivores
+        else             type_weights[t] = 2;  // predators
+        total_weight += type_weights[t];
+    }
+
     for (uint32_t i = 0; i < count; ++i) {
         glm::vec2 pos(rand_range_f(-rw / 2.0f, rw / 2.0f),
                       rand_range_f(-rh / 2.0f, rh / 2.0f));
@@ -70,7 +81,13 @@ void Particles::gen_particles(const SimConfig& cfg) {
         pos.x += rand_range_f(-jitter, jitter);
         pos.y += rand_range_f(-jitter, jitter);
 
-        uint32_t t = static_cast<uint32_t>(rand_range_i(0, (int)cfg.particle_types - 1));
+        // Weighted random type selection
+        uint32_t roll = static_cast<uint32_t>(rand_range_i(1, (int)total_weight));
+        uint32_t t = 0;
+        while (t < cfg.particle_types && roll > type_weights[t]) {
+            roll -= type_weights[t];
+            t++;
+        }
         add_particle(pos, glm::vec2(0.0f), t);
     }
 
@@ -88,13 +105,52 @@ void Particles::add_particle(glm::vec2 pos, glm::vec2 vel, uint32_t type) {
     angles.push_back(0.0f);
     angular_velocities.push_back(0.0f);
     stats.push_back(ParticleStats{});
+    organism_ids.push_back(0u);
 }
 
 void Particles::gen_random_force_matrix() {
+    // Trophic-level force matrix for realistic ecosystem dynamics:
+    //   Types 0-2: Producers (plants)     — self-attract, mildly avoid others
+    //   Types 3-5: Herbivores             — seek plants, flee predators
+    //   Types 6-8: Predators              — hunt herbivores, ignore plants
+    //   Type   9:  Food particles
+    //
+    // force[a + b*PT] = effect of neighbor b on particle a (>0 = attract, <0 = repel)
     forces.resize(MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES);
-    for (auto& f : forces)
-        f = rand_range_f(-1.0f, 1.0f);
+
+    auto set_row = [&](uint32_t a, float self_val,
+                       float to_plants, float to_herbivores,
+                       float to_predators, float to_food) {
+        for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+            uint32_t idx = a + b * MAX_PARTICLE_TYPES;
+            if (b == a) { forces[idx] = self_val; continue; }
+            if (b == FOOD_TYPE_INDEX) { forces[idx] = to_food; continue; }
+            if (b < 3)       forces[idx] = to_plants;
+            else if (b < 6)  forces[idx] = to_herbivores;
+            else             forces[idx] = to_predators;
+        }
+    };
+
+    // Producers (0-2): clump together, weakly avoid being eaten
+    set_row(0,  0.6f,  0.4f, -0.2f, -0.3f,  0.0f);
+    set_row(1,  0.6f,  0.4f, -0.2f, -0.3f,  0.0f);
+    set_row(2,  0.6f,  0.4f, -0.2f, -0.3f,  0.0f);
+
+    // Herbivores (3-5): seek plants (food), social grazing, flee predators
+    set_row(3,  0.3f,  0.8f,  0.2f, -0.6f,  0.0f);
+    set_row(4,  0.3f,  0.8f,  0.2f, -0.6f,  0.0f);
+    set_row(5,  0.3f,  0.8f,  0.2f, -0.6f,  0.0f);
+
+    // Predators (6-8): hunt herbivores, ignore plants, loose pack
+    set_row(6,  0.2f,  0.0f,  0.9f,  0.1f,  0.0f);
+    set_row(7,  0.2f,  0.0f,  0.9f,  0.1f,  0.0f);
+    set_row(8,  0.2f,  0.0f,  0.9f,  0.1f,  0.0f);
+
+    // Food repels itself slightly; all types attracted to food (set in gen_data)
+    forces[FOOD_TYPE_INDEX + FOOD_TYPE_INDEX * MAX_PARTICLE_TYPES] = -0.1f;
 }
+
+
 
 void Particles::gen_empty_force_matrix() {
     forces.assign(MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES, 0.0f);

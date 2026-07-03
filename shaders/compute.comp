@@ -42,9 +42,9 @@ struct Genome {
     float self_mod;
     float cross_mod;
     uint  generation;
-    float _pad0;
-    float _pad1;
-    float _pad2;
+    float adhesion;       // bond strength within an organism
+    float division_rate;  // reproduction speed modifier
+    float defense;        // resistance to predation / conversion
 };
 layout(set = 0, binding = 23, std430) buffer GenomeIn  { Genome data[]; } genome_in;
 layout(set = 0, binding = 24, std430) buffer GenomeOut { Genome data[]; } genome_out;
@@ -58,6 +58,9 @@ layout(set = 0, binding = 26, std430) buffer TerrainGrid { float data[]; } terra
 // Memory map (per-particle persistent signal memory, vec2 = position + value)
 layout(set = 0, binding = 27, std430) buffer MemoryMap { vec2 data[]; } memory_map;
 layout(set = 0, binding = 28, std430) buffer MemoryMapOut { vec2 data[]; } memory_map_out;
+
+// Per-particle organism membership (0 = free particle)
+layout(set = 0, binding = 29, std430) buffer OrganismID { uint data[]; } organism_id;
 
 // Push constants
 layout(push_constant, std430) uniform Params {
@@ -98,6 +101,7 @@ layout(push_constant, std430) uniform Params {
     float type_kin_share[10];        // 324
     float memory_decay;              // 364
     float memory_strength;           // 368
+    float cross_repro_rate;          // 372
 } params;
 
 // Behavior flag constants (must match ParticleBehavior enum in types.h)
@@ -196,6 +200,8 @@ void apply_physics(uint i) {
     float self_mod = genome.self_mod;
     float cross_mod = genome.cross_mod;
     uint  gen = genome.generation;
+    float adhesion = genome.adhesion;
+    uint  my_oid = organism_id.data[i];
 
     bool is_repel    = (flags_a & BEHAVIOR_REPEL)    != 0u;
     bool is_polar    = (flags_a & BEHAVIOR_POLAR)    != 0u;
@@ -257,12 +263,49 @@ void apply_physics(uint i) {
                     uint  type_b     = type_buffer.data[j];
                     uint  flags_b    = behavior_buffer.data[type_b];
                     float proximity  = 1.0f - dist / params.interaction_radius;
+                    vec2  normal     = normalize(delta);
                     
                     // Density
                     if (type_a == type_b)
                         local_density += proximity;
                     else
                         local_density += proximity * 0.5f;
+
+                    // Multicellular spring force: keep same-organism particles together
+                    if (adhesion > 0.0f && my_oid > 0u) {
+                        uint oid_b = organism_id.data[j];
+                        if (my_oid == oid_b) {
+                            float rest_length = params.radius * 3.0f;
+                            float displacement = dist - rest_length;
+                            float spring_k = adhesion * 0.2f;
+                            total_force += normal * displacement * spring_k;
+                        }
+                    }
+
+                    // Horizontal gene transfer: nearby same-organism particles exchange genome
+                    if (adhesion > 0.01f && my_oid > 0u) {
+                        uint oid_b = organism_id.data[j];
+                        if (my_oid == oid_b && dist < params.repulsion_radius * 1.5f && random(float(i + j) * params.dt) < 0.005f) {
+                            if (dist < params.repulsion_radius * 1.5f && random(float(i + j) * params.dt) < 0.005f) {
+                                // Exchange a random trait between bonded particles
+                                Genome neighbor = genome_in.data[j];
+                                float swap_r = random(float(i + j + 97) * params.dt);
+                                if (swap_r < 0.25f) {
+                                    float tmp = genome.self_mod;
+                                    genome.self_mod = neighbor.self_mod;
+                                } else if (swap_r < 0.5f) {
+                                    float tmp = genome.cross_mod;
+                                    genome.cross_mod = neighbor.cross_mod;
+                                } else if (swap_r < 0.75f) {
+                                    float tmp = genome.adhesion;
+                                    genome.adhesion = neighbor.adhesion;
+                                } else {
+                                    float tmp = genome.defense;
+                                    genome.defense = neighbor.defense;
+                                }
+                            }
+                        }
+                    }
 
                     // Flocking: align velocity with nearby same-type particles
                     if ((flags_a & BEHAVIOR_FLOCKING) != 0u && type_a == type_b) {
@@ -297,7 +340,7 @@ void apply_physics(uint i) {
                         attraction += charge_force;
                     }
 
-                    vec2  normal     = normalize(delta);
+                    normal = normalize(delta);
                     float force;
 
                     // Viral infection logic
@@ -307,12 +350,12 @@ void apply_physics(uint i) {
                         }
                     }
 
-                    // Predator-prey: actively convert prey when close
-                    if (is_predator && !is_food && !((flags_b & BEHAVIOR_PREDATOR) != 0u) && !((flags_b & BEHAVIOR_SHIELD) != 0u)) {
+                    // Predator-prey: convert nearby prey (marked as BEHAVIOR_FOOD but not actual food)
+                    if (is_predator && (flags_b & BEHAVIOR_FOOD) != 0u && type_b != 9u && (flags_b & BEHAVIOR_SHIELD) == 0u) {
                         if (dist < params.repulsion_radius * 1.2f && energy_a > 0.5f) {
                             float attack_chance = params.infection_rate * params.dt * 5.0f;
                             if (random(float(i + j + 5) * params.dt) < attack_chance) {
-                                // Convert prey
+                                // Convert prey to predator
                                 type_buffer.data[j] = type_a;
                                 energy_a += 0.3f; // energy reward
                             }
@@ -327,16 +370,24 @@ void apply_physics(uint i) {
                         }
                     }
 
-                    // Food logic
-                    if (!is_food && (flags_b & BEHAVIOR_FOOD) != 0u) {
+                    // Food logic — any non-food particle can eat actual food (type 9)
+                    if (!is_food && type_b == 9u) {
                         if (dist < params.repulsion_radius * 2.0f) {
                             float drain = 0.5f * params.dt;
                             energy_gain += drain;
                             atomicAdd(energy_out_buffer.data[j], -drain);
                         }
                     }
-                    // Predator pursuit: steer toward nearest prey
-                    if (is_predator && !is_food && (flags_b & BEHAVIOR_FOOD) == 0u && (flags_b & BEHAVIOR_PREDATOR) == 0u) {
+                    // Predation — only predators drain energy from BEHAVIOR_FOOD prey (herbivores)
+                    if (is_predator && (flags_b & BEHAVIOR_FOOD) != 0u && type_b != 9u) {
+                        if (dist < params.repulsion_radius * 2.0f) {
+                            float drain = 0.3f * params.dt;
+                            energy_gain += drain;
+                            atomicAdd(energy_out_buffer.data[j], -drain);
+                        }
+                    }
+                    // Predator pursuit: steer toward nearest prey (edible non-food types)
+                    if (is_predator && (flags_b & BEHAVIOR_FOOD) != 0u && type_b != 9u && (flags_b & BEHAVIOR_SHIELD) == 0u) {
                         float pursuit_force = 15.0f * proximity * params.dt;
                         total_force += normal * pursuit_force;
                     }
@@ -594,11 +645,37 @@ void apply_physics(uint i) {
                 // Allow both non-food and food parents (food = natural food reproduction)
                 float min_energy = is_currently_food ? 0.6f : 1.5f;
                 if (parent_energy > min_energy) {
-                    // ── Parent pays energy cost for offspring ──
-                    float cost = is_currently_food ? 0.1f : 0.3f;
-                    atomicAdd(energy_out_buffer.data[parent_idx], -cost);
-
                     vec2 parent_pos = in_pos_buffer.data[parent_idx];
+                    bool cross_species = false;
+                    uint parent2_idx = 0u;
+                    float parent2_energy = 0.0f;
+                    uint parent2_type = 9u;
+                    Genome parent2_genome;
+
+                    if (random(seed + 14.0f) < params.cross_repro_rate && parent_type != 9u) {
+                        // ── Cross-species reproduction: find a second parent of different type ──
+                        for (int attempt2 = 0; attempt2 < 3; ++attempt2) {
+                            uint p2 = uint(random(seed + 100.0f + float(attempt2)) * float(params.particle_count));
+                            if (p2 != i && p2 != parent_idx) {
+                                uint pt2 = type_buffer.data[p2];
+                                float pe2 = energy_in_buffer.data[p2];
+                                if (pt2 != 9u && pt2 != parent_type && pe2 > 1.5f) {
+                                    cross_species = true;
+                                    parent2_idx = p2;
+                                    parent2_type = pt2;
+                                    parent2_energy = pe2;
+                                    parent2_genome = genome_in.data[p2];
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Parent(s) pay energy cost for offspring ──
+                    float cost = is_currently_food ? 0.1f : (cross_species ? 0.5f : 0.3f);
+                    atomicAdd(energy_out_buffer.data[parent_idx], -cost);
+                    if (cross_species)
+                        atomicAdd(energy_out_buffer.data[parent2_idx], -cost * 0.5f);
 
                     // ── Offspring scatters at random distance (seed dispersal) ──
                     float scatter = params.radius * (4.0f + random(seed + 12.0f) * 30.0f);
@@ -611,11 +688,14 @@ void apply_physics(uint i) {
                         type_buffer.data[i] = 9u;
                         energy_a = 0.6f;
                     } else {
-                        type_buffer.data[i] = parent_type;
-                        energy_a = max(parent_energy * 0.4f, 0.2f);
+                        if (cross_species && random(seed + 15.0f) < 0.5f)
+                            type_buffer.data[i] = parent2_type;
+                        else
+                            type_buffer.data[i] = parent_type;
+                        energy_a = max((parent_energy + (cross_species ? parent2_energy : 0.0f)) * 0.35f, 0.25f);
                     }
 
-                    // Heritable trait mutation (inherit from parent with variation)
+                    // Heritable trait mutation (inherit from parent(s) with variation)
                     Genome parent_genome = genome_in.data[parent_idx];
                     float r0 = random(seed + 5.0f);
                     float r1 = random(seed + 6.0f);
@@ -623,20 +703,47 @@ void apply_physics(uint i) {
                     float r3 = random(seed + 8.0f);
                     float r4 = random(seed + 9.0f);
 
-                    genome.self_mod  = clamp(parent_genome.self_mod  + (r0 - 0.5f) * 0.3f, 0.3f, 2.0f);
-                    genome.cross_mod = clamp(parent_genome.cross_mod + (r1 - 0.5f) * 0.3f, 0.3f, 2.0f);
-                    genome.lifespan  = clamp(parent_genome.lifespan  + (r2 - 0.5f) * 60.0f, 20.0f, 800.0f);
-                    genome.age       = 0.0f;
-                    genome.generation = parent_genome.generation + 1u;
+                    if (cross_species) {
+                        // Blend both parents' genomes
+                        float blend_r = random(seed + 16.0f);
+                        genome.self_mod   = clamp(mix(parent_genome.self_mod,   parent2_genome.self_mod,   blend_r) + (r0 - 0.5f) * 0.35f, 0.3f, 2.0f);
+                        genome.cross_mod  = clamp(mix(parent_genome.cross_mod,  parent2_genome.cross_mod,  blend_r) + (r1 - 0.5f) * 0.35f, 0.3f, 2.0f);
+                        genome.lifespan   = clamp(mix(parent_genome.lifespan,   parent2_genome.lifespan,   blend_r) + (r2 - 0.5f) * 60.0f, 20.0f, 800.0f);
+                        genome.adhesion   = clamp(mix(parent_genome.adhesion,   parent2_genome.adhesion,   blend_r) + (r3 - 0.5f) * 0.2f,  0.0f, 2.0f);
+                        genome.division_rate = clamp(mix(parent_genome.division_rate, parent2_genome.division_rate, blend_r) + (r4 - 0.5f) * 0.2f, 0.0f, 2.0f);
+                        genome.defense    = clamp(mix(parent_genome.defense,    parent2_genome.defense,    blend_r) + (random(seed + 17.0f) - 0.5f) * 0.2f, 0.0f, 2.0f);
+                    } else {
+                        genome.self_mod    = clamp(parent_genome.self_mod    + (r0 - 0.5f) * 0.3f,  0.3f, 2.0f);
+                        genome.cross_mod   = clamp(parent_genome.cross_mod   + (r1 - 0.5f) * 0.3f,  0.3f, 2.0f);
+                        genome.lifespan    = clamp(parent_genome.lifespan    + (r2 - 0.5f) * 60.0f, 20.0f, 800.0f);
+                        genome.adhesion    = clamp(parent_genome.adhesion    + (r3 - 0.5f) * 0.2f,  0.0f, 2.0f);
+                        genome.division_rate = clamp(parent_genome.division_rate + (r4 - 0.5f) * 0.2f, 0.0f, 2.0f);
+                        genome.defense     = clamp(parent_genome.defense     + (random(seed + 17.0f) - 0.5f) * 0.2f, 0.0f, 2.0f);
+                    }
+                    genome.age = 0.0f;
+                    genome.generation = max(parent_genome.generation, (cross_species ? parent2_genome.generation : 0u)) + 1u;
 
                     // Behavior flag mutation: small chance to gain/lose a random flag
-                    if (r3 < 0.02f) {
-                        uint flag_bit = 1u << uint(random(seed + 10.0f) * 9.0f);
-                        atomicOr(behavior_buffer.data[parent_type], flag_bit);
-                    }
-                    if (r4 < 0.01f) {
-                        uint flag_bit = 1u << uint(random(seed + 11.0f) * 9.0f);
-                        atomicAnd(behavior_buffer.data[parent_type], ~flag_bit);
+                    if (cross_species) {
+                        // Hybrid gets wider mutation range (up to type_flocking_enabled bits + 2)
+                        uint max_bit = max(9u, 10u);
+                        if (r3 < 0.03f) {
+                            uint flag_bit = 1u << uint(random(seed + 10.0f) * max_bit);
+                            atomicOr(behavior_buffer.data[parent_type], flag_bit);
+                        }
+                        if (r4 < 0.02f) {
+                            uint flag_bit = 1u << uint(random(seed + 11.0f) * max_bit);
+                            atomicAnd(behavior_buffer.data[parent_type], ~flag_bit);
+                        }
+                    } else {
+                        if (r3 < 0.02f) {
+                            uint flag_bit = 1u << uint(random(seed + 10.0f) * 9.0f);
+                            atomicOr(behavior_buffer.data[parent_type], flag_bit);
+                        }
+                        if (r4 < 0.01f) {
+                            uint flag_bit = 1u << uint(random(seed + 11.0f) * 9.0f);
+                            atomicAnd(behavior_buffer.data[parent_type], ~flag_bit);
+                        }
                     }
 
                     spawned = true;

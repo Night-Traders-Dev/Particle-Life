@@ -384,9 +384,14 @@ void OrganismManager::check_speciation(Particles& particles, SimConfig&) {
         float div = std::max(self_div, cross_div);
         species_records[t].divergence = div;
 
-        if (div > max_divergence && div > 0.4f) {
+        // Reset speciation_logged when divergence drops back to normal
+        if (div < 0.2f)
+            species_records[t].speciation_logged = false;
+
+        if (div > max_divergence && div > 0.4f && !species_records[t].speciation_logged) {
             max_divergence = div;
             most_diverged_type = t;
+            species_records[t].speciation_logged = true;
         }
     }
 

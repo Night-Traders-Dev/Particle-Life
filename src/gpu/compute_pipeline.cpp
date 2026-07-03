@@ -126,11 +126,11 @@ void ComputePipeline::create_compute_pipeline(VulkanContext& ctx,
 // ── Descriptor pool ───────────────────────────────────────────────────────────
 
 void ComputePipeline::create_descriptor_pool(VkDevice device) {
-    // 29 bindings total per set, 2 sets:
-    //   storage buffers: bindings 0-6, 8-17, 21-28 -> 24 per set
+    // 30 bindings total per set, 2 sets:
+    //   storage buffers: bindings 0-6, 8-17, 21-29 -> 25 per set
     //   storage images : bindings 7, 18, 19, 20  ->  4 per set
     std::array<VkDescriptorPoolSize, 2> pool_sizes{};
-    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 24 * 2 };
+    pool_sizes[0] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 25 * 2 };
     pool_sizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,   4 * 2 };
 
     VkDescriptorPoolCreateInfo ci{};
@@ -184,6 +184,7 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     VkDeviceSize conv_size     = MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES * sizeof(ConversionData);
     VkDeviceSize halo_size     = MAX_HALOS * sizeof(OrganismHaloGPU);
     VkDeviceSize chem_grid_size  = CHEM_W * CHEM_H * sizeof(float);
+    VkDeviceSize oid_size      = elem_capacity * sizeof(uint32_t);
 
     pos_buffer_a_          = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
     pos_buffer_b_          = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
@@ -209,6 +210,7 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     genome_buffer_b_       = ctx.create_buffer(genome_size,  BUF_USAGE, MEM_PROPS);
     signal_grid_buffer_    = ctx.create_buffer(chem_grid_size, BUF_USAGE, MEM_PROPS);
     terrain_grid_buffer_   = ctx.create_buffer(chem_grid_size, BUF_USAGE, MEM_PROPS);
+    organism_id_buffer_    = ctx.create_buffer(oid_size,      BUF_USAGE, MEM_PROPS);
     memory_map_buffer_a_   = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
     memory_map_buffer_b_   = ctx.create_buffer(pos_size,      BUF_USAGE, MEM_PROPS);
 
@@ -262,6 +264,10 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     ctx.update_buffer(signal_grid_buffer_,  zero_chem.data(), chem_grid_size);
     ctx.update_buffer(terrain_grid_buffer_, zero_chem.data(), chem_grid_size);
 
+    // Organism IDs: zeroed (all free particles)
+    std::vector<uint32_t> zero_oid(static_cast<size_t>(actual_count), 0u);
+    ctx.update_buffer(organism_id_buffer_, zero_oid.data(), oid_size);
+
     // Memory map: zeroed (vec2 per particle)
     std::vector<float> zero_mem(static_cast<size_t>(elem_capacity * 2), 0.0f);
     ctx.update_buffer(memory_map_buffer_a_, zero_mem.data(), elem_capacity * 2 * sizeof(float));
@@ -308,6 +314,7 @@ void ComputePipeline::clear_buffers(VulkanContext& ctx) {
     ctx.destroy_buffer(genome_buffer_b_);
     ctx.destroy_buffer(signal_grid_buffer_);
     ctx.destroy_buffer(terrain_grid_buffer_);
+    ctx.destroy_buffer(organism_id_buffer_);
     ctx.destroy_buffer(memory_map_buffer_a_);
     ctx.destroy_buffer(memory_map_buffer_b_);
     ctx.destroy_buffer(screenshot_readback_buffer_);
@@ -389,6 +396,7 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     auto signal_sz = signal_grid_buffer_.size;
     auto terrain_sz = terrain_grid_buffer_.size;
     auto mem_sz = memory_map_buffer_a_.size;
+    auto oid_sz = organism_id_buffer_.size;
 
     // ── Set A: in=a, out=b ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_a_,  0, pos_buffer_a_.handle,         pos_sz);
@@ -420,6 +428,7 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_a_, 26, terrain_grid_buffer_.handle,   terrain_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 27, memory_map_buffer_a_.handle,   mem_sz);
     write_storage_buffer(writes, buf_infos, desc_set_a_, 28, memory_map_buffer_b_.handle,   mem_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_a_, 29, organism_id_buffer_.handle,    oid_sz);
 
     // ── Set B: in=b, out=a ────────────────────────────────────────────────────
     write_storage_buffer(writes, buf_infos, desc_set_b_,  0, pos_buffer_b_.handle,         pos_sz);
@@ -451,6 +460,7 @@ void ComputePipeline::allocate_and_write_descriptor_sets(VulkanContext& ctx) {
     write_storage_buffer(writes, buf_infos, desc_set_b_, 26, terrain_grid_buffer_.handle,   terrain_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 27, memory_map_buffer_b_.handle,   mem_sz);
     write_storage_buffer(writes, buf_infos, desc_set_b_, 28, memory_map_buffer_a_.handle,   mem_sz);
+    write_storage_buffer(writes, buf_infos, desc_set_b_, 29, organism_id_buffer_.handle,    oid_sz);
 
     vkUpdateDescriptorSets(ctx.device,
                            static_cast<uint32_t>(writes.size()),
@@ -475,11 +485,14 @@ void ComputePipeline::upload_dynamic_data(VulkanContext& ctx, const Particles& p
     VkDeviceSize color_size    = particles.colors.size()     * sizeof(glm::vec4);
     VkDeviceSize behavior_size = MAX_PARTICLE_TYPES           * sizeof(uint32_t);
     VkDeviceSize conv_size     = MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES * sizeof(ConversionData);
+    VkDeviceSize oid_size      = static_cast<VkDeviceSize>(particles.organism_ids.size()) * sizeof(uint32_t);
 
     ctx.update_buffer(force_buffer_,    effective_forces,              force_size);
     ctx.update_buffer(color_buffer_,    particles.colors.data(),       color_size);
     ctx.update_buffer(behavior_buffer_, particles.behavior_flags,      behavior_size);
     ctx.update_buffer(conversion_buffer_, particles.conversion_matrix, conv_size);
+    if (!particles.organism_ids.empty() && organism_id_buffer_.handle != VK_NULL_HANDLE)
+        ctx.update_buffer(organism_id_buffer_, particles.organism_ids.data(), oid_size);
 }
 
 void ComputePipeline::upload_halos(VulkanContext& ctx,
@@ -637,6 +650,7 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     pc.metabolism         = cfg.metabolism;
     pc.infection_rate     = cfg.infection_rate;
     pc.spawn_probability  = cfg.spawn_probability;
+    pc.cross_repro_rate   = cfg.cross_repro_rate;
     pc.day_night_factor   = day_night_factor;
     pc.wind_x             = wind.x;
     pc.wind_y             = wind.y;
@@ -843,6 +857,10 @@ void ComputePipeline::upload_particle_range(VulkanContext& ctx, const Particles&
     ctx.update_buffer_range(angular_vel_buffer_b_, &particles.angular_velocities[start], flt_off, flt_cnt);
     ctx.update_buffer_range(energy_buffer_a_, &particles.energy[start],          flt_off,  flt_cnt);
     ctx.update_buffer_range(energy_buffer_b_, &particles.energy[start],          flt_off,  flt_cnt);
+    // Organism IDs for new particles
+    if (!particles.organism_ids.empty() && organism_id_buffer_.handle != VK_NULL_HANDLE) {
+        ctx.update_buffer_range(organism_id_buffer_, &particles.organism_ids[start], type_off, type_cnt);
+    }
     // Energy modifiers & genomes — initialize to defaults for new particles
     std::vector<float> new_emods(count, 1.0f);
     ctx.update_buffer_range(energy_mod_buffer_, new_emods.data(), flt_off, flt_cnt);

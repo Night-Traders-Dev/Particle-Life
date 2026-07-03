@@ -71,14 +71,16 @@ struct ParticleStats {
 };
 
 // ── Per-particle genome (GPU-side, stored in a dedicated buffer) ──────────────
-// std430 layout: vec4-aligned
+// std430 layout: vec4-aligned, 32 bytes total
 struct alignas(16) GenomeData {
-    float age;
-    float lifespan;
-    float self_mod;      // multiplier for own-type attraction
-    float cross_mod;     // multiplier for cross-type attraction
-    uint32_t generation; // how many mitoses from initial seed
-    float padding[3];    // align to 32 bytes for future use
+    float age;             //  0 –  3  Current age in seconds
+    float lifespan;        //  4 –  7  Max age before death
+    float self_mod;        //  8 – 11  Multiplier for own-type attraction
+    float cross_mod;       // 12 – 15  Multiplier for cross-type attraction
+    uint32_t generation;   // 16 – 19  How many mitoses from initial seed
+    float    adhesion;     // 20 – 23  Bond strength within an organism (0 = none, 2 = max)
+    float    division_rate;// 24 – 27  Reproduction speed modifier (0 = slow, 2 = fast)
+    float    defense;      // 28 – 31  Resistance to predation / conversion (0 = weak, 2 = strong)
 };
 
 // ── GPU push-constant block (must match GLSL layout exactly) ─────────────────
@@ -122,8 +124,9 @@ struct PushConstants {
     float     type_kin_share[MAX_PARTICLE_TYPES];      // 324 – 363  (fraction of energy shared with same-type neighbors)
     float     memory_decay;             // 364  (decay rate for particle memory map)
     float     memory_strength;          // 368  (strength of memory-guided force)
+    float     cross_repro_rate;         // 372  (probability of two-parent cross-species reproduction)
 };
-static_assert(sizeof(PushConstants) == 372, "PushConstants layout mismatch");
+static_assert(sizeof(PushConstants) == 376, "PushConstants layout mismatch");
 
 // Effect flag bits (must match shader)
 static constexpr uint32_t EFFECT_TRAILS   = 1u << 0;
@@ -169,7 +172,7 @@ struct ConversionData {
 struct SimConfig {
     // Generation settings
     uint32_t particle_count     = 22500; // pow(150,2)
-    uint32_t particle_types     = 5;
+    uint32_t particle_types     = 9;
     bool     reset_colors       = false;
     bool     reset_forces       = true;
     uint32_t generation_seed    = 0;
@@ -181,9 +184,10 @@ struct SimConfig {
     float repulsion_radius   = 15.0f;
     float interaction_radius = 75.0f;
     float density_limit      = 80.0f;
-    float metabolism         = 0.2f;
-    float infection_rate     = 0.2f;
-    float spawn_probability  = 0.003f;
+    float     metabolism         = 0.2f;
+    float     infection_rate     = 0.2f;
+    float     spawn_probability  = 0.003f;
+    float     cross_repro_rate   = 0.15f;
 
     float energy_depletion_rates[MAX_PARTICLE_TYPES] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
 

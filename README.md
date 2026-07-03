@@ -20,6 +20,19 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
 - **Food Decomposition:** Uneaten food slowly decays over time, preventing infinite accumulation
 - **Per-type Metabolism:** Each particle type drains energy at a different rate (type 0 = 0.5×, type 8 = 2.0×), creating energy-budget specialization
 - **Natural Selection:** Types that feed efficiently and reproduce outcompete others organically
+- **Cross-Species Reproduction (Two-Parent Hybridization):**
+  - Two particles of different types can mate with probability `cross_repro_rate` (default 15%)
+  - Offspring genome is a **blend** of both parents' `self_mod`, `cross_mod`, `lifespan`, `adhesion`, `division_rate`, and `defense` using `mix()`
+  - Offspring type may come from either parent, enabling true inter-species gene flow
+  - Higher energy cost (0.5 from parent1, 0.25 from parent2) compared to single-parent mitosis (0.3)
+  - Hybrid offspring gain a slightly wider behavior-flag mutation range
+- **Horizontal Gene Transfer (HGT):**
+  - Within the same organism, nearby bonded particles exchange genome traits (`self_mod`, `cross_mod`, `adhesion`, `defense`) probabilistically
+  - Creates organism-level genetic cohesion independent of reproduction
+- **Multicellular Spring Forces:**
+  - Particles sharing the same `organism_id` are pulled toward a rest length (~3× interaction radius) proportional to `adhesion`
+  - Creates stretchy membranes and cohesive multicellular clusters
+- **CPU-Side Organism ID Writeback:** `OrganismManager` computes clusters on CPU; detected organism IDs are written back to the particle array and re-uploaded to GPU each detection cycle
 
 ### Predator-Prey Dynamics
 - **Predator Pursuit:** PREDATOR-flagged particles actively steer toward nearby prey in addition to force-matrix interactions

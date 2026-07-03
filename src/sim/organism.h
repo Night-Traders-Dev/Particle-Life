@@ -19,6 +19,7 @@ struct SpeciesRecord {
     float avg_cross_mod  = 0.8f;
     float avg_lifespan   = 300.0f;
     float divergence     = 0.0f;
+    bool  speciation_logged = false;
 };
 
 // ── Parasite co-evolution record ──────────────────────────────────────────────

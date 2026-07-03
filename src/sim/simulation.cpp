@@ -76,15 +76,37 @@ void Simulation::reset() {
     vkDeviceWaitIdle(vk.device);
     particles.gen_data(cfg);
 
-    // Set per-type properties for diversity
+    // Trophic-level energy depletion rates:
+    //   Producers (0-2):  low   = 0.3        (photosynthesise)
+    //   Herbivores (3-5): med   = 0.6        (graze on plants)
+    //   Predators  (6-8): high  = 1.2        (hunt)
+    //   Food       (9):   zero  = 0.0
     for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
-        cfg.energy_depletion_rates[t] = 0.5f + (float)t / 8.0f * 1.5f;
+        if (t == FOOD_TYPE_INDEX) {
+            cfg.energy_depletion_rates[t] = 0.0f;
+        } else if (t < 3) {
+            cfg.energy_depletion_rates[t] = 0.3f;
+        } else if (t < 6) {
+            cfg.energy_depletion_rates[t] = 0.6f;
+        } else {
+            cfg.energy_depletion_rates[t] = 1.2f;
+        }
     }
 
-    // Set migrator flag on every other type (1, 3, 5, 7)
+    // Trophic-level behavior flags:
+    //   Producers:  none (just sit and photosynthesise)
+    //   Herbivores: BEHAVIOR_FOOD (predators can eat them via food-drain logic)
+    //   Predators:  BEHAVIOR_PREDATOR (hunt non-predator, non-food particles)
+    //   Food:       BEHAVIOR_FOOD (legacy food particles)
     for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
-        if (t % 2 == 1 && t != FOOD_TYPE_INDEX) {
-            particles.behavior_flags[t] |= BEHAVIOR_MIGRATOR;
+        if (t == FOOD_TYPE_INDEX) {
+            particles.behavior_flags[t] = BEHAVIOR_FOOD;
+        } else if (t < 3) {
+            particles.behavior_flags[t] = BEHAVIOR_NONE;
+        } else if (t < 6) {
+            particles.behavior_flags[t] = BEHAVIOR_FOOD;
+        } else {
+            particles.behavior_flags[t] = BEHAVIOR_PREDATOR;
         }
     }
 
@@ -311,6 +333,18 @@ void Simulation::tick(GLFWwindow* window, double dt) {
             organism_manager.update(readback_positions_, readback_velocities_,
                                     particles.types, particles, &cfg);
 
+            // Write detected organism IDs back to particle array so GPU binding 29 is accurate
+            if (particles.organism_ids.size() != readback_positions_.size())
+                particles.organism_ids.resize(readback_positions_.size());
+            for (size_t k = 0; k < particles.organism_ids.size(); ++k)
+                particles.organism_ids[k] = 0u;
+            for (const auto& org : organism_manager.organisms) {
+                for (uint32_t idx : org.particle_indices) {
+                    if (idx < particles.organism_ids.size())
+                        particles.organism_ids[idx] = static_cast<uint32_t>(org.id);
+                }
+            }
+
             if (readback_positions_.size() == readback_types_.size())
                 update_seasonal_migration();
 
@@ -362,17 +396,19 @@ void Simulation::tick(GLFWwindow* window, double dt) {
                 float total_energy = 0.0f;
                 for (auto& e : particles.energy) total_energy += e;
 
-                // Count births (new non-food particles) and deaths (became food)
+                // Count births/deaths as net change in non-food population.
+                // Skip on first sample (prev data is all zeros from init).
                 uint32_t births = 0, deaths = 0;
-                for (uint32_t i = 0; i < readback_types_.size(); ++i) {
-                    uint32_t rt = readback_types_[i];
-                    if (rt != FOOD_TYPE_INDEX) {
-                        // If this particle's energy is near 1.0 and it wasn't counted in prev sample
-                        if (particles.energy[i] > 0.9f && prev_log_populations_[rt] > 0)
-                            births++;
+                if (prev_log_total_energy_ > 0.0f) {
+                    uint32_t non_food_before = 0, non_food_now = 0;
+                    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+                        if (t != FOOD_TYPE_INDEX) {
+                            non_food_before += prev_log_populations_[t];
+                            non_food_now += type_counts[t];
+                        }
                     }
-                    if (rt == FOOD_TYPE_INDEX && particles.energy[i] < 0.3f)
-                        deaths++;
+                    births  = (non_food_now > non_food_before) ? non_food_now - non_food_before : 0;
+                    deaths  = (non_food_before > non_food_now) ? non_food_before - non_food_now : 0;
                 }
                 auto now_epoch = std::chrono::system_clock::now();
                 auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
@@ -992,12 +1028,13 @@ void Simulation::write_ecosystem_log(double now, uint64_t frame_num,
     // Speciation events (detected via organism manager species records diverging)
     for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
         if (organism_manager.species_records[t].divergence > 0.35f &&
+            !organism_manager.species_records[t].speciation_logged &&
             prev_log_populations_[t] > 10 && type_counts[t] > 10) {
             char buf[128];
             snprintf(buf, sizeof(buf), "Type %u divergence %.2f — speciation imminent",
                      t, organism_manager.species_records[t].divergence);
             log_event(now, frame_num, "SPECIATION", buf);
-            organism_manager.species_records[t].divergence = 0.0f; // reset
+            organism_manager.species_records[t].speciation_logged = true;
         }
     }
 

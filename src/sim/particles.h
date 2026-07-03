@@ -27,6 +27,9 @@ public:
     // Per-type behavior bitmask (ParticleBehavior flags)
     uint32_t behavior_flags[MAX_PARTICLE_TYPES];
 
+    // Per-particle organism membership (0 = free particle)
+    std::vector<uint32_t> organism_ids;
+
     // Per-particle orientation (radians) and angular velocity — for POLAR type
     std::vector<float> angles;
     std::vector<float> angular_velocities;
