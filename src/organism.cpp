@@ -298,5 +298,14 @@ void OrganismManager::update(
     organisms      = std::move(new_orgs);
     prev_organisms_ = organisms;
 
+    // Compute average generation across all organisms
+    avg_generation = 0;
+    if (!organisms.empty()) {
+        uint64_t total_gen = 0;
+        for (auto& org : organisms)
+            total_gen += org.traits.generation;
+        avg_generation = static_cast<uint32_t>(total_gen / organisms.size());
+    }
+
     apply_trait_feedback(particles);
 }

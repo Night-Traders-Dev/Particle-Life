@@ -123,6 +123,61 @@ void Particles::gen_default_colors() {
     colors.resize(MAX_PARTICLE_TYPES, glm::vec4(1.0f));
 }
 
+void Particles::set_palette(int index) {
+    // Index 0 = default (existing colors)
+    if (index == 0) {
+        gen_default_colors();
+        return;
+    }
+
+    // Matplotlib colormaps sampled at 10 evenly-spaced points
+    // Each entry: [r, g, b] in [0,1]
+    static const float viridis[10][3] = {
+        {0.267f, 0.004f, 0.329f}, {0.282f, 0.140f, 0.458f},
+        {0.254f, 0.265f, 0.530f}, {0.207f, 0.382f, 0.549f},
+        {0.164f, 0.494f, 0.521f}, {0.160f, 0.600f, 0.451f},
+        {0.282f, 0.700f, 0.338f}, {0.497f, 0.786f, 0.199f},
+        {0.741f, 0.850f, 0.150f}, {0.993f, 0.906f, 0.144f},
+    };
+    static const float plasma[10][3] = {
+        {0.050f, 0.030f, 0.530f}, {0.280f, 0.016f, 0.615f},
+        {0.488f, 0.006f, 0.618f}, {0.667f, 0.086f, 0.543f},
+        {0.813f, 0.194f, 0.418f}, {0.921f, 0.320f, 0.268f},
+        {0.991f, 0.471f, 0.121f}, {0.998f, 0.637f, 0.027f},
+        {0.947f, 0.808f, 0.062f}, {0.941f, 0.975f, 0.131f},
+    };
+    static const float magma[10][3] = {
+        {0.001f, 0.000f, 0.014f}, {0.167f, 0.034f, 0.206f},
+        {0.384f, 0.035f, 0.323f}, {0.590f, 0.064f, 0.308f},
+        {0.768f, 0.159f, 0.203f}, {0.907f, 0.295f, 0.061f},
+        {0.981f, 0.462f, 0.000f}, {0.988f, 0.637f, 0.057f},
+        {0.979f, 0.808f, 0.201f}, {0.987f, 0.976f, 0.441f},
+    };
+    static const float inferno[10][3] = {
+        {0.001f, 0.000f, 0.014f}, {0.089f, 0.058f, 0.271f},
+        {0.247f, 0.100f, 0.482f}, {0.470f, 0.082f, 0.571f},
+        {0.695f, 0.125f, 0.524f}, {0.878f, 0.238f, 0.368f},
+        {0.994f, 0.391f, 0.142f}, {0.995f, 0.568f, 0.018f},
+        {0.947f, 0.750f, 0.005f}, {0.988f, 0.940f, 0.310f},
+    };
+
+    const float (*palette)[3] = nullptr;
+    switch (index) {
+        case 1: palette = viridis; break;
+        case 2: palette = plasma;  break;
+        case 3: palette = magma;   break;
+        case 4: palette = inferno; break;
+        default: gen_default_colors(); return;
+    }
+
+    colors.resize(MAX_PARTICLE_TYPES);
+    for (uint32_t i = 0; i < MAX_PARTICLE_TYPES; ++i) {
+        colors[i] = glm::vec4(palette[i][0], palette[i][1], palette[i][2], 1.0f);
+    }
+    // Food type remains bright green for visibility
+    colors[FOOD_TYPE_INDEX] = glm::vec4(0.5f, 1.0f, 0.0f, 1.0f);
+}
+
 int Particles::rand_range_i(int lo, int hi) {
     std::uniform_int_distribution<int> dist(lo, hi);
     return dist(rng_);

@@ -107,6 +107,8 @@ const uint CHEM_H = 180u;
 
 const float DEFAULT_LIFESPAN = 300.0f;
 
+const uint EFFECT_TRAIT_DISPLAY = 16u; // 1u << 4
+
 const uint GRID_CELL_SIZE = 60u;
 const uint GRID_W         = (7680u / GRID_CELL_SIZE) + 2u;
 const uint GRID_H         = (4320u / GRID_CELL_SIZE) + 2u;
@@ -656,7 +658,15 @@ void render_particle(uint i) {
             // circles smooth and round even at radius ~2px.
             float aa_band = max(1.0, radius * 0.2);
             float alpha   = 1.0 - smoothstep(radius - aa_band, radius, d_circle);
-            vec4 col = color_buffer.data[type];
+            vec4 col;
+            if ((params.effect_flags & EFFECT_TRAIT_DISPLAY) != 0u) {
+                // Trait display: color by self_mod (0.3=blue, 2.0=red)
+                float t = (genome.self_mod - 0.3f) / 1.7f; // 0.3→0.0, 2.0→1.0
+                t = clamp(t, 0.0f, 1.0f);
+                col = vec4(mix(vec3(0.1f, 0.3f, 1.0f), vec3(1.0f, 0.2f, 0.1f), t), 1.0f);
+            } else {
+                col = color_buffer.data[type];
+            }
             col.a *= clamp(energy * 2.0f, 0.2f, 1.0f) * alpha;
 
             if (energy < 0.3f) {

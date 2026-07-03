@@ -45,6 +45,7 @@ class OrganismManager {
 public:
     std::vector<Organism> organisms;    // current detected organisms
     float cluster_radius = 40.0f;       // proximity threshold for same-organism
+    uint32_t avg_generation = 0;        // average generation across all organisms
 
     // Clear all state (call on simulation reset)
     void reset();

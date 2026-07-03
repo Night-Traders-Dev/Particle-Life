@@ -52,6 +52,7 @@ public:
     void apply_preset_pos_monopole(uint32_t type);
     void apply_preset_neg_monopole(uint32_t type);
     void gen_default_colors();
+    void set_palette(int index);
 
     void add_particle(glm::vec2 pos,
                       glm::vec2 vel  = glm::vec2(0.0f),

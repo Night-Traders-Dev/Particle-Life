@@ -38,6 +38,10 @@ public:
     OrganismManager organism_manager{};
 
 private:
+    // Display state
+    int      palette_index_       = 0;        // 0=default, 1=viridis, 2=plasma, 3=magma, 4=inferno
+    bool     trait_display_mode_  = false;    // T key toggles self_mod coloring
+
     // Input state
     glm::vec2 last_mouse_pos_      = {};
     glm::vec2 mouse_change_        = {};
@@ -45,6 +49,7 @@ private:
     bool      lmb_down_            = false;
     float     time_scale_          = 1.0f;
     double    day_night_time_      = 0.0;
+    double    fps_                 = 0.0;
     const double DAY_NIGHT_CYCLE_LENGTH = 86400.0; // 24 hours in seconds
 
     // Weather
@@ -61,6 +66,7 @@ private:
     void resolve_zip_code(const std::string& zip);
     void generate_terrain();
     void spawn_seasonal_food();
+    void save_screenshot();
     bool http_fetch(const std::string& url, std::string& result);
     float extract_json_float(const std::string& json, const std::string& key);
     std::string extract_json_string(const std::string& json, const std::string& key);
@@ -70,6 +76,7 @@ private:
     std::vector<glm::vec2> readback_positions_;
     std::vector<glm::vec2> readback_velocities_;
     std::vector<uint32_t>  readback_types_;
+    std::vector<glm::vec2> cached_positions_; // for particle selection (updated on org detection)
 
     // Shader SPIRV paths (relative to working directory = build dir)
     static constexpr const char* COMPUTE_SPV  = "shaders/compute.spv";

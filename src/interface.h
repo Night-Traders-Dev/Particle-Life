@@ -16,6 +16,7 @@
 class Interface {
 public:
     bool settings_visible = true;
+    bool hud_visible      = true;
     bool mouse_within     = false; // true when cursor is over the settings panel
     bool glow_enabled     = false;
     bool autospawn_enabled = false;
@@ -38,12 +39,21 @@ public:
 
     // Archetype preset selection
     int      preset_selection[MAX_PARTICLE_TYPES] = {};
+    int      spawn_type_index = 0; // type spawned on left-click
     bool symmetry_enabled = false;
     int  hover_particle_index = -1;
     int64_t  hover_organism_id = -1; // NEW: Track hovered organism
 
     bool show_metrics_window = false; // NEW
     int  metrics_tab = 0;             // NEW
+
+    // Selected particle inspection (right-click)
+    int   selected_particle = -1;
+    float selected_particle_age = 0.0f;
+    float selected_particle_energy = 0.0f;
+    uint32_t selected_particle_type = 0;
+    int   selected_particle_organism = -1;
+    glm::vec2 selected_particle_pos = {};
 
     // Zip code for weather
     char  zip_code_buf[16]   = "";
@@ -58,6 +68,7 @@ public:
     float organism_count_history[300] = {};
     float birth_count_history[300] = {};
     float death_count_history[300] = {};
+    float generation_history[MAX_PARTICLE_TYPES][300] = {}; // per-type avg generation
     int   frame_counter = 0;
     uint32_t prev_particle_count = 0;
 
@@ -77,6 +88,9 @@ public:
                       bool&            request_reset,
                       double           day_night_time,
                       double           cycle_length,
+                      bool             paused,
+                      double           fps,
+                      uint32_t         avg_generation,
                       const WeatherData* weather = nullptr);
 
 private:

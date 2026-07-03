@@ -48,7 +48,8 @@ public:
                     float day_night_factor,
                     float compute_dt,
                     float time_seconds,
-                    glm::vec2 wind = glm::vec2(0.0f));
+                    glm::vec2 wind = glm::vec2(0.0f),
+                    uint32_t extra_effect_flags = 0u);
 
     // Called when framebuffer is resized
     void on_resize(VulkanContext& ctx, GLFWwindow* window);
@@ -92,6 +93,7 @@ private:
                                       float day_night_factor,
                                       float compute_dt,
                                       float time_seconds,
-                                      glm::vec2 wind);
+                                      glm::vec2 wind,
+                                      uint32_t extra_effect_flags = 0u);
 
 };

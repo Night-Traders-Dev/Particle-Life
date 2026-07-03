@@ -40,7 +40,8 @@ public:
                 uint32_t halo_count,
                 float    time_seconds,
                 float    day_night_factor,
-                glm::vec2 wind = glm::vec2(0.0f));
+                glm::vec2 wind = glm::vec2(0.0f),
+                uint32_t extra_effect_flags = 0u);
 
     // Upload force + color arrays (called each frame before record())
     void upload_dynamic_data(VulkanContext& ctx,
@@ -55,6 +56,12 @@ public:
                                  const std::vector<float>& modifiers);
 
     void upload_terrain(VulkanContext& ctx, const float* data);
+
+    void upload_colors(VulkanContext& ctx, const Particles& particles);
+
+    // Read back the particle texture to CPU-visible memory.
+    // Call after vkQueueWaitIdle. Returns RGBA32F pixel data.
+    void readback_particle_texture(VulkanContext& ctx, std::vector<float>& out_pixels);
 
     bool is_ready() const { return pos_buffer_a_.handle != VK_NULL_HANDLE; }
 
@@ -120,6 +127,10 @@ private:
 
     // Organism halo data (uploaded each frame from OrganismManager).
     Buffer halo_buffer_{};
+
+    // Screenshot readback buffer
+    Buffer screenshot_readback_buffer_{};
+    bool   screenshot_readback_created_ = false;
 
     // Descriptor sets: set_a uses (a→in, b→out), set_b uses (b→in, a→out)
     VkDescriptorSet desc_set_a_ = VK_NULL_HANDLE;

@@ -8,17 +8,17 @@
 void ComputePipeline::init(VulkanContext& ctx, const std::string& shader_spv_path) {
     const VkFormat HDR_FMT = VK_FORMAT_R32G32B32A32_SFLOAT;
 
-    auto make_storage_img = [&](Image& img, uint32_t w, uint32_t h) {
+    auto make_storage_img = [&](Image& img, uint32_t w, uint32_t h, VkImageUsageFlags extra = 0) {
         img = ctx.create_image(
             w, h, HDR_FMT,
-            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | extra,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         img.view = ctx.create_image_view(img.handle, HDR_FMT, VK_IMAGE_ASPECT_COLOR_BIT);
         ctx.transition_image_layout(img.handle,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
     };
 
-    make_storage_img(particle_texture, REGION_W, REGION_H);
+    make_storage_img(particle_texture, REGION_W, REGION_H, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     make_storage_img(bloom_lo,         BLOOM_W,  BLOOM_H);
     make_storage_img(bloom_blur,       BLOOM_W,  BLOOM_H);
     make_storage_img(composite_tex,    REGION_W, REGION_H);
@@ -210,6 +210,15 @@ void ComputePipeline::create_buffers(VulkanContext& ctx, const Particles& partic
     signal_grid_buffer_    = ctx.create_buffer(chem_grid_size, BUF_USAGE, MEM_PROPS);
     terrain_grid_buffer_   = ctx.create_buffer(chem_grid_size, BUF_USAGE, MEM_PROPS);
 
+    // Screenshot readback buffer (RGBA32F → 4 bytes per channel × 4 channels)
+    {
+        VkDeviceSize sbuf_size = REGION_W * REGION_H * 4 * sizeof(float);
+        screenshot_readback_buffer_ = ctx.create_buffer(sbuf_size,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        screenshot_readback_created_ = true;
+    }
+
     // Upload initial data (only the actual count, not the full capacity)
     ctx.update_buffer(pos_buffer_a_,  particles.positions.data(),        pos_upload);
     ctx.update_buffer(pos_buffer_b_,  particles.positions.data(),        pos_upload);
@@ -292,6 +301,8 @@ void ComputePipeline::clear_buffers(VulkanContext& ctx) {
     ctx.destroy_buffer(genome_buffer_b_);
     ctx.destroy_buffer(signal_grid_buffer_);
     ctx.destroy_buffer(terrain_grid_buffer_);
+    ctx.destroy_buffer(screenshot_readback_buffer_);
+    screenshot_readback_created_ = false;
 }
 
 // ── Write descriptor sets ─────────────────────────────────────────────────────
@@ -480,6 +491,12 @@ void ComputePipeline::upload_terrain(VulkanContext& ctx, const float* data) {
     ctx.update_buffer(terrain_grid_buffer_, data, CHEM_W * CHEM_H * sizeof(float));
 }
 
+void ComputePipeline::upload_colors(VulkanContext& ctx, const Particles& particles) {
+    if (color_buffer_.handle == VK_NULL_HANDLE) return;
+    VkDeviceSize color_size = particles.colors.size() * sizeof(glm::vec4);
+    ctx.update_buffer(color_buffer_, particles.colors.data(), color_size);
+}
+
 void ComputePipeline::read_current_state(VulkanContext& ctx,
                                           std::vector<glm::vec2>& out_positions,
                                           std::vector<glm::vec2>& out_velocities,
@@ -511,6 +528,58 @@ void ComputePipeline::read_current_state(VulkanContext& ctx,
     vkUnmapMemory(ctx.device, type_buffer_.memory);
 }
 
+void ComputePipeline::readback_particle_texture(VulkanContext& ctx, std::vector<float>& out_pixels) {
+    if (!screenshot_readback_created_) return;
+    VkDeviceSize pixel_count = REGION_W * REGION_H * 4;
+    out_pixels.resize(static_cast<size_t>(pixel_count));
+
+    // One-shot command buffer for the copy
+    VkCommandBuffer cmd = ctx.begin_single_command();
+
+    // Transition particle_texture to TRANSFER_SRC_OPTIMAL
+    VkImageMemoryBarrier img_barrier{};
+    img_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    img_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    img_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    img_barrier.image = particle_texture.handle;
+    img_barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    img_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    img_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                         0, nullptr, 0, nullptr, 1, &img_barrier);
+
+    // Copy image to buffer
+    VkBufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    region.imageOffset = { 0, 0, 0 };
+    region.imageExtent = { REGION_W, REGION_H, 1 };
+    vkCmdCopyImageToBuffer(cmd, particle_texture.handle,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           screenshot_readback_buffer_.handle, 1, &region);
+
+    // Transition back to GENERAL
+    img_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    img_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    img_barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    img_barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                         0, nullptr, 0, nullptr, 1, &img_barrier);
+
+    ctx.end_single_command(cmd);
+
+    // Map and copy to output
+    void* mapped;
+    VkDeviceSize buf_size = pixel_count * sizeof(float);
+    vkMapMemory(ctx.device, screenshot_readback_buffer_.memory, 0, buf_size, 0, &mapped);
+    std::memcpy(out_pixels.data(), mapped, static_cast<size_t>(buf_size));
+    vkUnmapMemory(ctx.device, screenshot_readback_buffer_.memory);
+}
+
 // ── Record (called per frame while simulation is active) ──────────────────────
 
 void ComputePipeline::record(VkCommandBuffer cmd,
@@ -519,7 +588,8 @@ void ComputePipeline::record(VkCommandBuffer cmd,
                              uint32_t halo_count,
                              float time_seconds,
                              float day_night_factor,
-                             glm::vec2 wind)
+                             glm::vec2 wind,
+                             uint32_t extra_effect_flags)
 {
     if (pos_buffer_a_.handle == VK_NULL_HANDLE) return;
 
@@ -545,7 +615,8 @@ void ComputePipeline::record(VkCommandBuffer cmd,
     pc.effect_flags       = (cfg.trails_enabled   ? EFFECT_TRAILS   : 0u)
                           | (cfg.bloom_enabled    ? EFFECT_BLOOM    : 0u)
                           | (cfg.vignette_enabled ? EFFECT_VIGNETTE : 0u)
-                          | (cfg.halos_enabled    ? EFFECT_HALOS    : 0u);
+                          | (cfg.halos_enabled    ? EFFECT_HALOS    : 0u)
+                          | extra_effect_flags;
     pc.repulsion_radius   = cfg.repulsion_radius;
     pc.interaction_radius = cfg.interaction_radius;
     pc.density_limit      = cfg.density_limit;

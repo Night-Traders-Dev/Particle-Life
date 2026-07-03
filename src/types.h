@@ -121,6 +121,7 @@ static constexpr uint32_t EFFECT_TRAILS   = 1u << 0;
 static constexpr uint32_t EFFECT_BLOOM    = 1u << 1;
 static constexpr uint32_t EFFECT_VIGNETTE = 1u << 2;
 static constexpr uint32_t EFFECT_HALOS    = 1u << 3;
+static constexpr uint32_t EFFECT_TRAIT_DISPLAY = 1u << 4; // T key: show self_mod as color
 
 // ── Organism halo (uploaded each frame, std430-aligned) ──────────────────────
 

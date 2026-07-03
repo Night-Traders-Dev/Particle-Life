@@ -28,6 +28,9 @@ void Interface::render_imgui(SimConfig&       cfg,
                               bool&            request_reset,
                               double           day_night_time,
                               double           cycle_length,
+                              bool             paused,
+                              double           fps,
+                              uint32_t         avg_generation,
                               const WeatherData* weather)
 {
     request_reset = false;
@@ -117,6 +120,70 @@ void Interface::render_imgui(SimConfig&       cfg,
         ImGui::PopStyleColor();
     }
 
+    // ── Pause Overlay ──────────────────────────────────────────────────────────
+    if (paused) {
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowBgAlpha(0.0f);
+        ImGui::Begin("##pause", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBackground);
+        float pulse = 0.6f + 0.4f * sinf((float)ImGui::GetTime() * 3.0f);
+        ImVec4 pulse_col(1.0f, 1.0f, 1.0f, pulse);
+        ImGui::SetWindowFontScale(3.0f);
+        ImGui::TextColored(pulse_col, "PAUSED");
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::End();
+    }
+
+    // ── HUD Overlay (F3) ──────────────────────────────────────────────────────
+    if (hud_visible) {
+        ImGui::SetNextWindowBgAlpha(0.35f);
+        ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
+        ImGui::Begin("HUD", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_AlwaysAutoResize);
+        ImGui::Text("FPS: %.0f", fps);
+        ImGui::Text("Particles: %u", cfg.particle_count);
+        ImGui::Text("Avg Gen: %u", avg_generation);
+        ImGui::Text("Organisms: %zu", org_manager.organisms.size());
+        ImGui::Text("Speed: %.1fx", time_scale_slider);
+        // Type distribution bars
+        float type_counts[MAX_PARTICLE_TYPES] = {};
+        size_t np = particles.positions.size();
+        for (size_t i = 0; i < np; ++i) {
+            if (particles.types[i] < MAX_PARTICLE_TYPES)
+                type_counts[particles.types[i]] += 1.0f;
+        }
+        float total_types = 0.0f;
+        for (uint32_t t = 0; t < cfg.particle_types; ++t)
+            total_types += type_counts[t];
+        if (total_types > 0.0f) {
+            ImGui::Separator();
+            for (uint32_t t = 0; t < cfg.particle_types; ++t) {
+                float pct = type_counts[t] / total_types;
+                const glm::vec4& c = particles.colors[t];
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(c.x, c.y, c.z, 0.8f));
+                char label[32];
+                snprintf(label, sizeof(label), "T%u", t);
+                ImGui::ProgressBar(pct, ImVec2(120, 10), label);
+                ImGui::PopStyleColor();
+            }
+        }
+
+        // Selected particle info (right-click)
+        if (selected_particle >= 0) {
+            ImGui::Separator();
+            ImGui::Text("Selected P%d", selected_particle);
+            ImGui::Text("Type: %u  Energy: %.2f", selected_particle_type, selected_particle_energy);
+            ImGui::Text("Age: %.1fs  Org: %d", selected_particle_age, selected_particle_organism);
+            if (ImGui::Button("Deselect")) selected_particle = -1;
+        }
+        ImGui::End();
+    }
+
     if (show_metrics_window) {
         draw_metrics_window(cfg, particles, org_manager);
     }
@@ -151,6 +218,8 @@ void Interface::render_imgui(SimConfig&       cfg,
     ImGui::InputInt("Seed", &seed_value);
     seed_value = std::clamp(seed_value, 0, 65535);
     cfg.generation_seed = static_cast<uint32_t>(seed_value);
+    ImGui::SetNextItemWidth(120);
+    ImGui::SliderInt("Spawn Type", &spawn_type_index, 0, (int)cfg.particle_types - 1);
     if (ImGui::Button("Reset Simulation (F2)", ImVec2(-1, 0))) request_reset = true;
 
     ImGui::SeparatorText("Real-time Physics");
@@ -450,6 +519,21 @@ void Interface::draw_metrics_window(SimConfig& cfg, Particles& particles, Organi
                 for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t)
                     population_history[t][history_head] = type_counts[t];
 
+                // Per-type average generation from organism data
+                float gen_counts[MAX_PARTICLE_TYPES] = {};
+                float gen_sums[MAX_PARTICLE_TYPES] = {};
+                for (auto& org : org_manager.organisms) {
+                    uint32_t dt = org.traits.dominant_type;
+                    if (dt < MAX_PARTICLE_TYPES) {
+                        gen_sums[dt] += float(org.traits.generation) * float(org.traits.size);
+                        gen_counts[dt] += float(org.traits.size);
+                    }
+                }
+                for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
+                    generation_history[t][history_head] = (gen_counts[t] > 0.0f)
+                        ? gen_sums[t] / gen_counts[t] : 0.0f;
+                }
+
                 total_energy_history[history_head] = total_energy;
                 avg_speed_history[history_head]    = (n > 0) ? (total_speed / (float)n) : 0.0f;
                 organism_count_history[history_head] = (float)org_manager.organisms.size();
@@ -475,6 +559,18 @@ void Interface::draw_metrics_window(SimConfig& cfg, Particles& particles, Organi
                 RingBufferData rbd = { population_history[t], history_head, HISTORY_LEN };
                 char label[32];
                 snprintf(label, sizeof(label), "Type %u", t);
+                ImGui::PlotLines(label, ring_getter, &rbd, HISTORY_LEN, 0, nullptr, 0.0f, FLT_MAX, ImVec2(plot_w, plot_h));
+                ImGui::PopStyleColor();
+            }
+
+            // ── Per-type Generation ─────────────────────────────────────────
+            ImGui::SeparatorText("Avg Generation per Type");
+            for (uint32_t t = 0; t < cfg.particle_types; ++t) {
+                const glm::vec4& c = particles.colors[t];
+                ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(c.r, c.g, c.b, 1.0f));
+                RingBufferData rbd = { generation_history[t], history_head, HISTORY_LEN };
+                char label[32];
+                snprintf(label, sizeof(label), "Gen %u", t);
                 ImGui::PlotLines(label, ring_getter, &rbd, HISTORY_LEN, 0, nullptr, 0.0f, FLT_MAX, ImVec2(plot_w, plot_h));
                 ImGui::PopStyleColor();
             }
@@ -514,8 +610,63 @@ void Interface::draw_metrics_window(SimConfig& cfg, Particles& particles, Organi
                 ImGui::PopStyleColor();
             }
 
+            // ── Population Pie Chart ────────────────────────────────────────
+            ImGui::SeparatorText("Population Distribution");
+            {
+                float type_counts[MAX_PARTICLE_TYPES] = {};
+                size_t n = particles.positions.size();
+                for (size_t i = 0; i < n; ++i) {
+                    if (particles.types[i] < MAX_PARTICLE_TYPES)
+                        type_counts[particles.types[i]] += 1.0f;
+                }
+                float total = 0.0f;
+                for (uint32_t t = 0; t < cfg.particle_types; ++t)
+                    total += type_counts[t];
+
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                ImVec2 pos = ImGui::GetCursorScreenPos();
+                float radius = 80.0f;
+                ImVec2 center(pos.x + radius + 10.0f, pos.y + radius + 10.0f);
+                float angle_start = -3.14159f * 0.5f; // start from top
+
+                if (total > 0.0f) {
+                    for (uint32_t t = 0; t < cfg.particle_types; ++t) {
+                        float pct = type_counts[t] / total;
+                        float angle_end = angle_start + pct * 2.0f * 3.14159f;
+                        const glm::vec4& c = particles.colors[t];
+                        uint32_t col = ImGui::ColorConvertFloat4ToU32(ImVec4(c.x, c.y, c.z, 0.9f));
+
+                        // Draw filled arc as triangle fan with 20 segments
+                        int segments = int(pct * 40.0f) + 2;
+                        if (segments < 3) segments = 3;
+                        dl->PathClear();
+                        dl->PathLineTo(center);
+                        for (int s = 0; s <= segments; ++s) {
+                            float a = angle_start + (float(s) / float(segments)) * (angle_end - angle_start);
+                            dl->PathLineTo(ImVec2(center.x + cosf(a) * radius, center.y + sinf(a) * radius));
+                        }
+                        dl->PathFillConvex(col);
+
+                        // Legend
+                        ImVec4 col_f(c.x, c.y, c.z, 1.0f);
+                        ImGui::SameLine();
+                        ImGui::SetCursorPosY(ImGui::GetCursorPosY() - (radius * 2.0f) + float(t) * 20.0f + radius * 2.0f + 10.0f);
+                        ImGui::ColorButton(("##piecol" + std::to_string(t)).c_str(), col_f,
+                                           ImGuiColorEditFlags_NoTooltip, ImVec2(12, 12));
+                        ImGui::SameLine();
+                        ImGui::Text("Type %u: %.0f (%.1f%%)", t, type_counts[t], pct * 100.0f);
+
+                        angle_start = angle_end;
+                    }
+                } else {
+                    ImGui::Text("No particles");
+                }
+                ImGui::Dummy(ImVec2(0, radius * 2.0f + 20.0f));
+            }
+
             ImGui::EndTabItem();
         }
+
         ImGui::EndTabBar();
     }
     ImGui::End();

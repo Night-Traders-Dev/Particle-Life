@@ -107,10 +107,25 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     if (is_active)
         compute.upload_dynamic_data(vk, particles);
 
+    // ── FPS tracking ───────────────────────────────────────────────────────────
+    if (dt > 0.0) {
+        double smooth = 0.05;
+        fps_ = (fps_ > 0.0) ? fps_ * (1.0 - smooth) + (1.0 / dt) * smooth : 1.0 / dt;
+    }
+
+    // ── Avg generation from particles.genome (CPU-side, updated on organism readback) ──
+    uint32_t avg_generation = 0;
+    if (!particles.types.empty()) {
+        // Use organism manager's per-type generation data as a proxy
+        avg_generation = organism_manager.avg_generation;
+    }
+
     // ── ImGui ──────────────────────────────────────────────────────────────────
     bool request_reset = false;
     uint32_t prev_count = cfg.particle_count;
-    iface.render_imgui(cfg, particles, organism_manager, request_reset, day_night_time_, DAY_NIGHT_CYCLE_LENGTH, &weather_);
+    iface.render_imgui(cfg, particles, organism_manager, request_reset,
+                       day_night_time_, DAY_NIGHT_CYCLE_LENGTH,
+                       !is_active, fps_, avg_generation, &weather_);
     time_scale_ = iface.time_scale_slider;
 
     if (cfg.particle_count != prev_count) {
@@ -144,8 +159,9 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     }
     if (renderer.swapchain_dirty)
         renderer.on_resize(vk, window);
+    uint32_t extra_flags = trait_display_mode_ ? EFFECT_TRAIT_DISPLAY : 0u;
     renderer.draw_frame(vk, compute, is_active, cfg, particles, organism_manager,
-                         day_night_factor, scaled_dt, (float)glfwGetTime(), wind_force);
+                         day_night_factor, scaled_dt, (float)glfwGetTime(), wind_force, extra_flags);
     if (is_active && compute.is_ready()) {
         // Procedural food spawning (every 600 frames)
         if (iface.autospawn_enabled && organism_tick_counter_ % 600 == 0) {
@@ -211,6 +227,7 @@ void Simulation::tick(GLFWwindow* window, double dt) {
             readback_types_.resize(cfg.particle_count);
             compute.read_current_state(vk, readback_positions_, readback_velocities_, readback_types_);
             particles.types = readback_types_;
+            cached_positions_ = readback_positions_;
             organism_manager.update(readback_positions_, readback_velocities_,
                                     particles.types, particles);
         }
@@ -246,6 +263,68 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
     if (f2_cur && !f2_prev)
         reset();
     f2_prev = f2_cur;
+
+    // F3: toggle HUD overlay
+    static bool f3_prev = false;
+    bool f3_cur = (glfwGetKey(window, GLFW_KEY_F3) == GLFW_PRESS);
+    if (f3_cur && !f3_prev)
+        iface.hud_visible = !iface.hud_visible;
+    f3_prev = f3_cur;
+
+    // P: cycle palette forward (default → viridis → plasma → magma → inferno → default)
+    static bool p_prev = false;
+    bool p_cur = (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS);
+    if (p_cur && !p_prev) {
+        palette_index_ = (palette_index_ + 1) % 5;
+        particles.set_palette(palette_index_);
+        compute.upload_colors(vk, particles);
+    }
+    p_prev = p_cur;
+
+    // B: cycle palette backward
+    static bool b_prev = false;
+    bool b_cur = (glfwGetKey(window, GLFW_KEY_B) == GLFW_PRESS);
+    if (b_cur && !b_prev) {
+        palette_index_ = (palette_index_ + 4) % 5;
+        particles.set_palette(palette_index_);
+        compute.upload_colors(vk, particles);
+    }
+    b_prev = b_cur;
+
+    // N: reset to default palette
+    static bool n_prev = false;
+    bool n_cur = (glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS);
+    if (n_cur && !n_prev) {
+        palette_index_ = 0;
+        particles.set_palette(0);
+        compute.upload_colors(vk, particles);
+    }
+    n_prev = n_cur;
+
+    // M: switch to magma palette
+    static bool m_prev = false;
+    bool m_cur = (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS);
+    if (m_cur && !m_prev) {
+        palette_index_ = 3;
+        particles.set_palette(3);
+        compute.upload_colors(vk, particles);
+    }
+    m_prev = m_cur;
+
+    // T: toggle trait display mode
+    static bool t_prev = false;
+    bool t_cur = (glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS);
+    if (t_cur && !t_prev)
+        trait_display_mode_ = !trait_display_mode_;
+    t_prev = t_cur;
+
+    // F12: save screenshot
+    static bool f12_prev = false;
+    bool f12_cur = (glfwGetKey(window, GLFW_KEY_F12) == GLFW_PRESS);
+    if (f12_cur && !f12_prev) {
+        save_screenshot();
+    }
+    f12_prev = f12_cur;
 
     // F11: toggle fullscreen
     static bool f11_prev = false;
@@ -321,7 +400,7 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
         particles.stats.resize(n, ParticleStats{});
 
         // Append the new particle and update GPU buffers.
-        particles.add_particle(world_pos, glm::vec2(0.0f), 0);
+        particles.add_particle(world_pos, glm::vec2(0.0f), iface.spawn_type_index);
         cfg.particle_count++;
         iface.particle_count_slider = std::sqrt(static_cast<float>(cfg.particle_count));
         if (cfg.particle_count > compute.capacity())
@@ -331,9 +410,40 @@ void Simulation::handle_input(GLFWwindow* window, double dt) {
     }
     lmb_down_prev = lmb_down_curr;
 
-    // Ensure right click doesn't trigger anything else (e.g. reset)
-    // Right button is handled by the force grid/UI specifically
-    // Removed the problematic f2 logic previously attached to mouse button.
+    // Right-click: select nearest particle for inspection
+    static bool rmb_prev = false;
+    bool rmb_cur = (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS);
+    if (rmb_cur && !rmb_prev && !iface.mouse_within) {
+        double mx2, my2;
+        glfwGetCursorPos(window, &mx2, &my2);
+        glm::vec2 mouse_pos2 = { static_cast<float>(mx2), static_cast<float>(my2) };
+        glm::vec2 world_pos  = (mouse_pos2 - glm::vec2(1280.0f, 720.0f)) / cfg.current_camera_zoom + cfg.camera_origin;
+
+        // Use cached positions if available, otherwise do a one-shot readback
+        if (cached_positions_.size() == cfg.particle_count) {
+            // Find nearest particle within 50 world units
+            float best_dist = 50.0f * 50.0f;
+            int best_idx = -1;
+            for (uint32_t i = 0; i < cfg.particle_count; ++i) {
+                float dx = cached_positions_[i].x - world_pos.x;
+                float dy = cached_positions_[i].y - world_pos.y;
+                float d = dx * dx + dy * dy;
+                if (d < best_dist) {
+                    best_dist = d;
+                    best_idx = int(i);
+                }
+            }
+            iface.selected_particle = best_idx;
+            if (best_idx >= 0) {
+                iface.selected_particle_pos = cached_positions_[best_idx];
+                iface.selected_particle_type = particles.types[best_idx];
+                iface.selected_particle_energy = particles.energy[best_idx];
+                iface.selected_particle_age = particles.stats[best_idx].spawn_time;
+                iface.selected_particle_organism = particles.stats[best_idx].current_organism_id;
+            }
+        }
+    }
+    rmb_prev = rmb_cur;
 }
 
 // ── Weather HTTP helpers ──────────────────────────────────────────────────────
@@ -464,6 +574,47 @@ void Simulation::spawn_seasonal_food() {
         compute.resize_buffers(vk, particles);
     else
         compute.upload_particle_range(vk, particles, n, food_count);
+}
+
+#include <fstream>
+void Simulation::save_screenshot() {
+    if (!compute.is_ready()) return;
+    vkQueueWaitIdle(vk.queue);
+
+    std::vector<float> pixels;
+    compute.readback_particle_texture(vk, pixels);
+    if (pixels.empty()) return;
+
+    // Convert RGBA32F → RGB8 and write PPM
+    static int shot_count = 0;
+    shot_count++;
+    auto now = std::chrono::system_clock::now();
+    auto t = std::chrono::system_clock::to_time_t(now);
+    char fname[64];
+    std::strftime(fname, sizeof(fname), "screenshot_%Y%m%d_%H%M%S.ppm", std::localtime(&t));
+
+    std::ofstream f(fname, std::ios::binary);
+    if (!f) {
+        std::cerr << "Failed to open " << fname << " for writing\n";
+        return;
+    }
+
+    f << "P6\n" << REGION_W << " " << REGION_H << "\n255\n";
+    const float* src = pixels.data();
+    size_t num_pixels = REGION_W * REGION_H;
+    for (size_t i = 0; i < num_pixels; ++i) {
+        // RGBA32F → RGB8 with gamma correction
+        auto to_byte = [](float v) -> uint8_t {
+            v = std::clamp(v, 0.0f, 1.0f);
+            v = std::pow(v, 1.0f / 2.2f); // gamma
+            return uint8_t(v * 255.0f + 0.5f);
+        };
+        uint8_t rgb[3] = { to_byte(src[0]), to_byte(src[1]), to_byte(src[2]) };
+        f.write(reinterpret_cast<const char*>(rgb), 3);
+        src += 4;
+    }
+
+    std::cout << "Screenshot saved: " << fname << " (" << (num_pixels * 3) / (1024*1024) << " MB)\n";
 }
 
 void Simulation::fetch_geolocation() {

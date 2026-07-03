@@ -377,7 +377,8 @@ bool Renderer::draw_frame(VulkanContext& ctx,
                           float day_night_factor,
                           float compute_dt,
                           float time_seconds,
-                          glm::vec2 wind)
+                          glm::vec2 wind,
+                          uint32_t extra_effect_flags)
 {
     (void)sim_active;
     FrameData& frame = frames_[current_frame_];
@@ -398,7 +399,7 @@ bool Renderer::draw_frame(VulkanContext& ctx,
     // Record
     VkCommandBuffer cmd = frame.cmd;
     vkResetCommandBuffer(cmd, 0);
-    record_command_buffer(cmd, image_index, ctx, compute, sim_active, cfg, particles, org_manager, day_night_factor, compute_dt, time_seconds, wind);
+    record_command_buffer(cmd, image_index, ctx, compute, sim_active, cfg, particles, org_manager, day_night_factor, compute_dt, time_seconds, wind, extra_effect_flags);
 
     // Submit
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -452,7 +453,8 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd,
                                       float           day_night_factor,
                                       float           compute_dt,
                                       float           time_seconds,
-                                      glm::vec2       wind)
+                                      glm::vec2       wind,
+                                      uint32_t        extra_effect_flags)
 {
     (void)sim_active;
     (void)cfg;
@@ -465,7 +467,7 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd,
     // ── Compute dispatches (recorded directly into the render cmd buffer) ─────
     // This eliminates the GPU idle time between separate compute/render submits.
     if (sim_active && compute.is_ready()) {
-        compute.record(cmd, cfg, compute_dt, 0, time_seconds, day_night_factor, wind);
+        compute.record(cmd, cfg, compute_dt, 0, time_seconds, day_night_factor, wind, extra_effect_flags);
     }
 
     // NOTE: The barrier at the end of ComputePipeline::record() handles the
