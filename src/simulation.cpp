@@ -163,56 +163,74 @@ void Simulation::tick(GLFWwindow* window, double dt) {
     renderer.draw_frame(vk, compute, is_active, cfg, particles, organism_manager,
                          day_night_factor, scaled_dt, (float)glfwGetTime(), wind_force, extra_flags);
     if (is_active && compute.is_ready()) {
-        // Procedural food spawning (every 600 frames)
+        // Natural food spawning: small food patches grow from existing food clusters
         if (iface.autospawn_enabled && organism_tick_counter_ % 600 == 0) {
             vkQueueWaitIdle(vk.queue);
-            std::mt19937 rng(std::random_device{}());
-            float view_w = (float)REGION_W / cfg.current_camera_zoom;
-            float view_h = (float)REGION_H / cfg.current_camera_zoom;
-            std::uniform_real_distribution<float> dist_x(cfg.camera_origin.x - view_w/2.0f, cfg.camera_origin.x + view_w/2.0f);
-            std::uniform_real_distribution<float> dist_y(cfg.camera_origin.y - view_h/2.0f, cfg.camera_origin.y + view_h/2.0f);
-            float cx = dist_x(rng);
-            float cy = dist_y(rng);
-            std::uniform_real_distribution<float> clump_dist(-50.0f, 50.0f);
-            const uint32_t n = cfg.particle_count;
             compute.read_current_state(vk, particles.positions, particles.velocities, particles.types);
-            int food_to_spawn = 100;
-            int extra_particles = (int)(cfg.particle_count * 0.10f);
-            uint32_t new_total = n + food_to_spawn + extra_particles;
-            particles.positions.resize(new_total);
-            particles.velocities.resize(new_total);
-            particles.types.resize(new_total);
-            particles.energy.resize(new_total, 1.0f);
-            particles.angles.resize(new_total, 0.0f);
-            particles.angular_velocities.resize(new_total, 0.0f);
-            particles.stats.resize(new_total);
-            for (int i = 0; i < food_to_spawn; ++i) {
-                int idx = n + i;
-                particles.positions[idx] = glm::vec2(cx + clump_dist(rng), cy + clump_dist(rng));
-                particles.velocities[idx] = glm::vec2(0.0f);
-                particles.types[idx] = FOOD_TYPE_INDEX;
-                particles.energy[idx] = 1.0f;
-                particles.angles[idx] = 0.0f;
-                particles.angular_velocities[idx] = 0.0f;
-                particles.stats[idx] = ParticleStats{};
+            const uint32_t n = cfg.particle_count;
+
+            // Find existing food clusters to seed new growth around them
+            std::mt19937 rng(std::random_device{}());
+            int food_to_spawn = 0;
+            int food_count = 0;
+            for (uint32_t i = 0; i < n; ++i)
+                if (particles.types[i] == FOOD_TYPE_INDEX)
+                    food_count++;
+            // Spawn more food when existing food is abundant (bloom), less when scarce
+            food_to_spawn = food_count > 50 ? 40 : (food_count > 10 ? 20 : 10);
+
+            if (food_to_spawn > 0) {
+                uint32_t new_total = n + food_to_spawn;
+                particles.positions.resize(new_total);
+                particles.velocities.resize(new_total);
+                particles.types.resize(new_total);
+                particles.energy.resize(new_total, 1.0f);
+                particles.angles.resize(new_total, 0.0f);
+                particles.angular_velocities.resize(new_total, 0.0f);
+                particles.stats.resize(new_total);
+
+                // Spawn near existing food when possible, otherwise random
+                float half_w = float(REGION_W) * 1.5f;
+                float half_h = float(REGION_H) * 1.5f;
+                std::uniform_real_distribution<float> world_x(-half_w, half_w);
+                std::uniform_real_distribution<float> world_y(-half_h, half_h);
+                std::uniform_real_distribution<float> jitter(-100.0f, 100.0f);
+
+                for (int i = 0; i < food_to_spawn; ++i) {
+                    int idx = n + i;
+                    if (food_count > 0 && (rng() % 3) != 0) {
+                        // 2/3 chance: spawn near an existing food particle
+                        uint32_t src = uint32_t(rng() % n);
+                        int tries = 0;
+                        while (particles.types[src] != FOOD_TYPE_INDEX && tries < 20) {
+                            src = uint32_t(rng() % n);
+                            tries++;
+                        }
+                        if (particles.types[src] == FOOD_TYPE_INDEX) {
+                            particles.positions[idx] = particles.positions[src] + glm::vec2(jitter(rng), jitter(rng));
+                            particles.types[idx] = FOOD_TYPE_INDEX;
+                            particles.energy[idx] = 0.6f;
+                        } else {
+                            particles.positions[idx] = glm::vec2(world_x(rng), world_y(rng));
+                            particles.types[idx] = FOOD_TYPE_INDEX;
+                            particles.energy[idx] = 0.6f;
+                        }
+                    } else {
+                        particles.positions[idx] = glm::vec2(world_x(rng), world_y(rng));
+                        particles.types[idx] = FOOD_TYPE_INDEX;
+                        particles.energy[idx] = 0.6f;
+                    }
+                    particles.velocities[idx] = glm::vec2(0.0f);
+                    particles.angles[idx] = 0.0f;
+                    particles.angular_velocities[idx] = 0.0f;
+                    particles.stats[idx] = ParticleStats{};
+                }
+                cfg.particle_count = new_total;
+                if (new_total > compute.capacity())
+                    compute.resize_buffers(vk, particles);
+                else
+                    compute.upload_particle_range(vk, particles, n, food_to_spawn);
             }
-            std::uniform_int_distribution<uint32_t> type_dist(0, cfg.particle_types - 1);
-            for (int i = 0; i < extra_particles; ++i) {
-                int idx = n + food_to_spawn + i;
-                uint32_t t = type_dist(rng);
-                particles.positions[idx] = glm::vec2(dist_x(rng), dist_y(rng));
-                particles.velocities[idx] = glm::vec2(0.0f);
-                particles.types[idx] = t;
-                particles.energy[idx] = 1.0f;
-                particles.angles[idx] = 0.0f;
-                particles.angular_velocities[idx] = 0.0f;
-                particles.stats[idx] = ParticleStats{};
-            }
-            cfg.particle_count = new_total;
-            if (new_total > compute.capacity())
-                compute.resize_buffers(vk, particles);
-            else
-                compute.upload_particle_range(vk, particles, n, food_to_spawn + extra_particles);
         }
 
         // Seasonal food spawning (every 1200 frames)
@@ -553,7 +571,7 @@ void Simulation::spawn_seasonal_food() {
     const uint32_t n = cfg.particle_count;
     vkQueueWaitIdle(vk.queue);
     compute.read_current_state(vk, particles.positions, particles.velocities, particles.types);
-    int food_count = 60;
+    int food_count = 30;
     uint32_t new_total = n + food_count;
     particles.positions.resize(new_total);
     particles.velocities.resize(new_total);

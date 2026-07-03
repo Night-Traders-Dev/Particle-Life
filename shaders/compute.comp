@@ -528,13 +528,29 @@ void apply_physics(uint i) {
                 float parent_energy = energy_in_buffer.data[parent_idx];
                 uint parent_type = type_buffer.data[parent_idx];
 
-                if (parent_energy > 1.5f && parent_type != 9u) {
+                // Allow both non-food and food parents (food = natural food reproduction)
+                float min_energy = is_currently_food ? 0.6f : 1.5f;
+                if (parent_energy > min_energy) {
+                    // ── Parent pays energy cost for offspring ──
+                    float cost = is_currently_food ? 0.1f : 0.3f;
+                    atomicAdd(energy_out_buffer.data[parent_idx], -cost);
+
                     vec2 parent_pos = in_pos_buffer.data[parent_idx];
-                    vec2 offset = (random2(seed) - 0.5f) * params.radius * 4.0f;
-                    pos_a = parent_pos + offset;
-                    vel_a = in_vel_buffer.data[parent_idx] * 0.5f;
-                    type_buffer.data[i] = parent_type;
-                    energy_a = 1.0f;
+
+                    // ── Offspring scatters at random distance (seed dispersal) ──
+                    float scatter = params.radius * (4.0f + random(seed + 12.0f) * 30.0f);
+                    float a = random(seed + 13.0f) * 6.28318f;
+                    pos_a = parent_pos + vec2(cos(a), sin(a)) * scatter;
+                    vel_a = in_vel_buffer.data[parent_idx] * 0.3f;
+
+                    if (parent_type == 9u) {
+                        // Food reproduction: offspring is also food
+                        type_buffer.data[i] = 9u;
+                        energy_a = 0.6f;
+                    } else {
+                        type_buffer.data[i] = parent_type;
+                        energy_a = 1.0f;
+                    }
 
                     // Heritable trait mutation (inherit from parent with variation)
                     Genome parent_genome = genome_in.data[parent_idx];
@@ -570,8 +586,9 @@ void apply_physics(uint i) {
             vec2 r = random2(seed);
             pos_a = (r - 0.5f) * params.region_size;
             vel_a = vec2(0.0f);
-            energy_a = 1.0f;
-            type_buffer.data[i] = uint(random(seed + 1.23f) * float(params.particle_types));
+            energy_a = is_currently_food ? 0.6f : 1.0f;
+            type_buffer.data[i] = is_currently_food ? 9u
+                : uint(random(seed + 1.23f) * float(params.particle_types));
 
             // Fresh genome defaults for abiogenesis
             genome.age       = 0.0f;
