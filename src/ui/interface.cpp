@@ -340,7 +340,7 @@ void Interface::draw_particle_grid(SimConfig& cfg, Particles& particles) {
     float cell_size   = std::max(available_w / (pt + 1), 12.0f);
     for (uint32_t row = 0; row <= pt; ++row) {
         for (uint32_t col = 0; col <= pt; ++col) {
-            ImGui::PushID(static_cast<int>(row * 11 + col));
+            ImGui::PushID(static_cast<int>(row * MAX_PARTICLE_TYPES + col));
             if (row == 0 && col == 0) ImGui::Dummy(ImVec2(cell_size, cell_size));
             else if (row == 0) {
                 uint32_t type_idx = col - 1;
