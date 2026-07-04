@@ -51,7 +51,7 @@ TEST_CASE(BehaviorFlags_bit_operations) {
 
 TEST_CASE(BehaviorFlags_atomicOr_and) {
     uint32_t flags = BEHAVIOR_NONE;
-    uint32_t bit = 1u << 7; // SIGNALING
+    uint32_t bit = BEHAVIOR_SIGNALING; // bit 6 = SIGNALING
     flags |= bit;
     ASSERT_TRUE((flags & BEHAVIOR_SIGNALING) != 0, "atomicOr sets bit");
     flags &= ~bit;

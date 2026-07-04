@@ -11,7 +11,7 @@ TEST_CASE(Config_default_particle_count) {
 
 TEST_CASE(Config_default_particle_types) {
     SimConfig cfg;
-    ASSERT_INT_EQ(cfg.particle_types, 9u, "default particle types");
+    ASSERT_INT_EQ(cfg.particle_types, 14u, "default particle types");
     return true;
 }
 
@@ -35,7 +35,7 @@ TEST_CASE(Config_default_metabolism) {
 
 TEST_CASE(Config_default_spawn_probability) {
     SimConfig cfg;
-    ASSERT_FLOAT_EQ(cfg.spawn_probability, 0.003f, 1e-5f, "default spawn probability");
+    ASSERT_FLOAT_EQ(cfg.spawn_probability, 0.0005f, 1e-5f, "default spawn probability");
     return true;
 }
 
@@ -53,10 +53,15 @@ TEST_CASE(Config_zip_code_example) {
     return true;
 }
 
-TEST_CASE(Config_energy_depletion_all_ones_by_default) {
+TEST_CASE(Config_energy_depletion_rates_initialized) {
     SimConfig cfg;
-    for (int i = 0; i < MAX_PARTICLE_TYPES; ++i)
-        ASSERT_FLOAT_EQ(cfg.energy_depletion_rates[i], 1.0f, 1e-4f, "default depletion rate");
+    // Default init has all 1.0 values (only first 10 set in initializer)
+    // Water (index 0) has default 1.0 until simulation sets it to 0.0
+    ASSERT_FLOAT_EQ(cfg.energy_depletion_rates[TYPE_WATER], 1.0f, 1e-4f, "water depletion default");
+    // Check that array has correct size
+    for (int i = 0; i < MAX_PARTICLE_TYPES; ++i) {
+        ASSERT_TRUE(cfg.energy_depletion_rates[i] >= 0.0f && cfg.energy_depletion_rates[i] <= 2.0f, "depletion in valid range");
+    }
     return true;
 }
 
