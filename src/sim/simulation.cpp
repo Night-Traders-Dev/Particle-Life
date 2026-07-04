@@ -1018,9 +1018,9 @@ void Simulation::write_ecosystem_log(double now, uint64_t frame_num,
         eco_log_ << "," << type_counts[t];
     eco_log_ << "," << births << "," << deaths;
 
-    // Collapse detection: any non-food type dropped significantly
+    // Collapse detection: any non-nutrient type dropped significantly
     int collapse_flag = 0;
-    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES - 1; ++t) { // exclude food (type 9)
+    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) { // all types, including nutrients
         uint32_t prev = prev_log_populations_[t];
         uint32_t curr = type_counts[t];
         if (prev > 20 && curr < prev / 3) {

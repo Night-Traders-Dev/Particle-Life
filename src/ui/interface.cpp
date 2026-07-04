@@ -221,7 +221,7 @@ void Interface::render_imgui(SimConfig&       cfg,
     int pc = static_cast<int>(std::max(2.0f, std::pow(particle_count_slider, 2.0f)));
     ImGui::Text("Particle Count:  %d", pc);
     cfg.particle_count = static_cast<uint32_t>(pc);
-    ImGui::SliderFloat("Types Slider", &particle_types_slider, 1.0f, 10.0f, "%.0f");
+    ImGui::SliderFloat("Types Slider", &particle_types_slider, 1.0f, 14.0f, "%.0f");
     int pt = static_cast<int>(particle_types_slider);
     ImGui::Text("Particle Types:  %d", pt);
     cfg.particle_types = static_cast<uint32_t>(pt);

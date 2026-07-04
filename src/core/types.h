@@ -190,7 +190,7 @@ struct ConversionData {
 struct SimConfig {
     // Generation settings
     uint32_t particle_count     = 22500; // pow(150,2)
-    uint32_t particle_types     = 9;
+    uint32_t particle_types     = 14;
     bool     reset_colors       = false;
     bool     reset_forces       = true;
     uint32_t generation_seed    = 0;

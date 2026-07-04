@@ -23,7 +23,7 @@ public:
 
     // ── Sliders (raw slider values, converted to actual params by render_imgui) ─
     float particle_count_slider  = 150.0f;  // particle_count = pow(value, 2)
-    float particle_types_slider  = 6.0f;
+    float particle_types_slider  = 14.0f;
     float particle_radius_slider = 1.5f;
     float dampening_slider       = 0.5f;
     float repulsion_slider       = 15.0f;
