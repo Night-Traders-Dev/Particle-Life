@@ -15,28 +15,13 @@ void Particles::gen_data(const SimConfig& cfg) {
     for (float& s : trait_scales) s = 1.0f;
     for (auto& f : behavior_flags) f = BEHAVIOR_NONE;
 
-    // Set food behavior
-    behavior_flags[FOOD_TYPE_INDEX] = BEHAVIOR_FOOD;
-
     gen_empty_conversion_matrix();
 
     if (cfg.reset_forces)
-        gen_random_force_matrix();
+        gen_biochemical_force_matrix();
 
     if (cfg.reset_colors)
-        gen_default_colors();
-    
-    // Food color: Bright lime green
-    colors[FOOD_TYPE_INDEX] = glm::vec4(0.5f, 1.0f, 0.0f, 1.0f);
-
-    // Make all types slightly attracted to food by default
-    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
-        if (t == FOOD_TYPE_INDEX) {
-            forces[t + t * MAX_PARTICLE_TYPES] = -0.1f; // Food repels itself slightly
-        } else {
-            forces[t + FOOD_TYPE_INDEX * MAX_PARTICLE_TYPES] = 0.5f; // Attraction towards food
-        }
-    }
+        gen_biochemical_colors();
 
     gen_particles(cfg);
 }
@@ -63,13 +48,34 @@ void Particles::gen_particles(const SimConfig& cfg) {
 
     uint32_t count = cfg.particle_count;
 
-    // Weighted trophic distribution: 50% plants, 30% herbivores, 20% predators
+    // Biochemical distribution for cellular soup simulation:
+    // Mix of molecules that can self-organize into cells
     uint32_t type_weights[MAX_PARTICLE_TYPES] = {};
     uint32_t total_weight = 0;
+    
+    // Water dominates the environment (60%)
+    type_weights[TYPE_WATER] = 60;
+    
+    // Ions and simple molecules (20% combined)
+    type_weights[TYPE_IONS] = 15;
+    type_weights[TYPE_SIMPLE] = 5;
+    
+    // Building blocks for cells (15% combined)
+    type_weights[TYPE_LIPIDS] = 5;
+    type_weights[TYPE_PROTEINS] = 5;
+    type_weights[TYPE_NUCLEIC] = 3;
+    type_weights[TYPE_CELL_MEM] = 2;
+    
+    // Organelles, nutrients, reactive species (4% combined)
+    type_weights[TYPE_ORGANELLE] = 2;
+    type_weights[TYPE_NUTRIENT] = 2;
+    type_weights[TYPE_PROTON] = 1;
+    type_weights[TYPE_ELECTRON] = 1;
+    
+    // Rare infectious/viral particles (<1%)
+    type_weights[TYPE_VIRUS] = 1;
+
     for (uint32_t t = 0; t < cfg.particle_types && t < MAX_PARTICLE_TYPES; ++t) {
-        if (t < 3)       type_weights[t] = 5;  // plants
-        else if (t < 6)  type_weights[t] = 3;  // herbivores
-        else             type_weights[t] = 2;  // predators
         total_weight += type_weights[t];
     }
 
@@ -90,11 +96,6 @@ void Particles::gen_particles(const SimConfig& cfg) {
         }
         add_particle(pos, glm::vec2(0.0f), t);
     }
-
-    // Random initial orientations for all particles (used by POLAR types)
-    for (uint32_t i = 0; i < positions.size(); ++i) {
-        angles[i] = rand_range_f(0.0f, 6.28318f);
-    }
 }
 
 void Particles::add_particle(glm::vec2 pos, glm::vec2 vel, uint32_t type) {
@@ -108,46 +109,152 @@ void Particles::add_particle(glm::vec2 pos, glm::vec2 vel, uint32_t type) {
     organism_ids.push_back(0u);
 }
 
-void Particles::gen_random_force_matrix() {
-    // Trophic-level force matrix for realistic ecosystem dynamics:
-    //   Types 0-2: Producers (plants)     — self-attract, mildly avoid others
-    //   Types 3-5: Herbivores             — seek plants, flee predators
-    //   Types 6-8: Predators              — hunt herbivores, ignore plants
-    //   Type   9:  Food particles
-    //
+void Particles::gen_biochemical_force_matrix() {
+    // Biochemical interaction matrix based on molecular compatibility
     // force[a + b*PT] = effect of neighbor b on particle a (>0 = attract, <0 = repel)
     forces.resize(MAX_PARTICLE_TYPES * MAX_PARTICLE_TYPES);
 
-    auto set_row = [&](uint32_t a, float self_val,
-                       float to_plants, float to_herbivores,
-                       float to_predators, float to_food) {
-        for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
-            uint32_t idx = a + b * MAX_PARTICLE_TYPES;
-            if (b == a) { forces[idx] = self_val; continue; }
-            if (b == FOOD_TYPE_INDEX) { forces[idx] = to_food; continue; }
-            if (b < 3)       forces[idx] = to_plants;
-            else if (b < 6)  forces[idx] = to_herbivores;
-            else             forces[idx] = to_predators;
-        }
-    };
+    // Biochemical affinities:
+    // - Water attracts most soluble molecules (hydration shell effect)
+    // - Ions attract oppositely charged, repel similarly charged
+    // - Lipids repel water (hydrophobic effect), attract other lipids/membranes
+    // - Proteins bind selectively to targets (receptors/enzymes)
+    // - Nutrients are attracted to all metabolic entities
+    // - Cells attract internal components, repel foreign cells
+    // - Dead cells attract decomposers, repel living cells
 
-    // Producers (0-2): clump together, weakly avoid being eaten
-    set_row(0,  0.6f,  0.4f, -0.2f, -0.3f,  0.0f);
-    set_row(1,  0.6f,  0.4f, -0.2f, -0.3f,  0.0f);
-    set_row(2,  0.6f,  0.4f, -0.2f, -0.3f,  0.0f);
+    // Water (highly polar, universal solvent)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_WATER + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_WATER) forces[idx] = 0.3f;       // Water-water mild attraction (cohesion)
+        else if (b == TYPE_IONS) forces[idx] = 0.8f;   // Hydration
+        else if (b == TYPE_SIMPLE) forces[idx] = 0.6f;    // Dissolves gases/nutrients
+        else if (b == TYPE_LIPIDS) forces[idx] = -0.5f;  // Hydrophobic exclusion
+        else forces[idx] = 0.2f;  // Mild attraction to others
+    }
 
-    // Herbivores (3-5): seek plants (food), social grazing, flee predators
-    set_row(3,  0.3f,  0.8f,  0.2f, -0.6f,  0.0f);
-    set_row(4,  0.3f,  0.8f,  0.2f, -0.6f,  0.0f);
-    set_row(5,  0.3f,  0.8f,  0.2f, -0.6f,  0.0f);
+    // Ions (charged, hydrated in solution)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_IONS + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_WATER) forces[idx] = 0.8f;       // Hydration
+        else if (b == TYPE_IONS) forces[idx] = -0.3f;   // Like charges repel
+        else if (b == TYPE_NUTRIENT) forces[idx] = 0.4f; // Some nutrients ionize
+        else forces[idx] = 0.1f;
+    }
 
-    // Predators (6-8): hunt herbivores, ignore plants, loose pack
-    set_row(6,  0.2f,  0.0f,  0.9f,  0.1f,  0.0f);
-    set_row(7,  0.2f,  0.0f,  0.9f,  0.1f,  0.0f);
-    set_row(8,  0.2f,  0.0f,  0.9f,  0.1f,  0.0f);
+    // Simple molecules (CO2, O2, glucose - small soluble)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_SIMPLE + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_WATER) forces[idx] = 0.6f;
+        else if (b == TYPE_SIMPLE) forces[idx] = 0.2f;
+        else if (b == TYPE_NUTRIENT) forces[idx] = 0.7f;  // Similar molecules attract
+        else if (b == TYPE_CELL) forces[idx] = 0.9f;     // Cells consume nutrients
+        else forces[idx] = 0.1f;
+    }
 
-    // Food repels itself slightly; all types attracted to food (set in gen_data)
-    forces[FOOD_TYPE_INDEX + FOOD_TYPE_INDEX * MAX_PARTICLE_TYPES] = -0.1f;
+    // Lipids (hydrophobic, form membranes)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_LIPIDS + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_LIPIDS) forces[idx] = 0.7f;       // Lipid-lipid attraction (membrane formation)
+        else if (b == TYPE_WATER) forces[idx] = -0.6f;   // Hydrophobic exclusion
+        else if (b == TYPE_CELL_MEM) forces[idx] = 0.8f; // Membrane integration
+        else forces[idx] = -0.2f;  // Repel most polar molecules
+    }
+
+    // Proteins (enzymes, receptors, structural)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_PROTEINS + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_PROTEINS) forces[idx] = 0.5f;      // Protein-protein binding
+        else if (b == TYPE_NUCLEIC) forces[idx] = 0.6f;  // Protein-DNA/RNA interaction
+        else if (b == TYPE_ORGANELLE) forces[idx] = 0.8f; // Organelle proteins
+        else if (b == TYPE_CELL) forces[idx] = 0.7f;     // Cell protein integration
+        else if (b == TYPE_LIPIDS) forces[idx] = 0.4f;   // Membrane proteins
+        else forces[idx] = 0.2f;
+    }
+
+    // Nucleic acids (DNA/RNA - templating, information)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_NUCLEIC + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_NUCLEIC) forces[idx] = 0.4f;       // Strand pairing
+        else if (b == TYPE_PROTEINS) forces[idx] = 0.6f; // Transcription/translation
+        else if (b == TYPE_CELL) forces[idx] = 0.8f;     // Genetic integration
+        else forces[idx] = 0.1f;
+    }
+
+    // Cell membrane components
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_CELL_MEM + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_CELL_MEM) forces[idx] = 0.8f;      // Membrane self-assembly
+        else if (b == TYPE_LIPIDS) forces[idx] = 0.9f;   // Lipid bilayer formation
+        else if (b == TYPE_CELL) forces[idx] = 0.5f;     // Membrane attachment
+        else forces[idx] = -0.3f;  // Repel most internal components
+    }
+
+    // Organelles (active cellular machinery)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_ORGANELLE + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_ORGANELLE) forces[idx] = 0.3f;      // Organelle clustering
+        else if (b == TYPE_CELL) forces[idx] = 0.9f;     // Cell-organelle binding
+        else if (b == TYPE_NUTRIENT) forces[idx] = 0.6f; // Nutrient processing
+        else forces[idx] = 0.2f;
+    }
+
+    // Electrons (extremely reactive radicals)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_ELECTRON + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_ELECTRON) forces[idx] = -0.9f;      // Electron-electron repulsion
+        else forces[idx] = -0.3f;                         // Toxic to most
+    }
+
+    // Nutrients (food - attracted to metabolic entities)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_NUTRIENT + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_NUTRIENT) forces[idx] = -0.1f;     // Nutrient dispersal
+        else if (b == TYPE_CELL) forces[idx] = 0.8f;     // Consumed by cells
+        else if (b == TYPE_ORGANELLE) forces[idx] = 0.6f;  // Used by organelles
+        else forces[idx] = 0.2f;
+    }
+
+    // Protons (H+ - acidic, reactive)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_PROTON + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_PROTON) forces[idx] = -0.5f;        // Proton-proton repulsion
+        else if (b == TYPE_ELECTRON) forces[idx] = 0.9f; // H+ combines with electrons
+        else forces[idx] = -0.1f;                        // Mildly toxic
+    }
+
+    // Living cells (autonomous organisms)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_CELL + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_CELL) forces[idx] = 0.4f;          // Cell-cell adhesion (limited)
+        else if (b == TYPE_NUTRIENT) forces[idx] = 0.9f; // Seeks nutrients
+        else if (b == TYPE_WATER) forces[idx] = 0.3f;    // Hydration
+        else if (b == TYPE_ORGANELLE) forces[idx] = 0.7f; // Internal components
+        else if (b == TYPE_VIRUS) forces[idx] = -0.5f;   // Avoid infection
+        else if (b == TYPE_DEAD_CELL) forces[idx] = -0.3f; // Avoid decay
+        else forces[idx] = 0.1f;
+    }
+
+    // Dead cells (decomposing waste)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_DEAD_CELL + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_DEAD_CELL) forces[idx] = 0.3f;     // Corpse clustering
+        else if (b == TYPE_CELL) forces[idx] = -0.6f;    // Repel living cells
+        else forces[idx] = 0.1f;
+    }
+
+    // Viruses (infectious particles)
+    for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
+        uint32_t idx = TYPE_VIRUS + b * MAX_PARTICLE_TYPES;
+        if (b == TYPE_VIRUS) forces[idx] = 0.2f;         // Virion aggregation
+        else if (b == TYPE_CELL) forces[idx] = 0.8f;     // Seeks host cells
+        else forces[idx] = -0.5f;                         // Repel most
+    }
+}
+
+void Particles::gen_random_force_matrix() {
+    // Legacy function - calls biochemical version for compatibility
+    gen_biochemical_force_matrix();
 }
 
 
@@ -163,20 +270,44 @@ void Particles::gen_empty_conversion_matrix() {
     }
 }
 
-void Particles::gen_default_colors() {
+void Particles::gen_biochemical_colors() {
+    // Biochemically-inspired color palette:
+    // 0: Water - clear blue
+    // 1: Ions - metallic silver
+    // 2: Simple molecules - pale yellow (like glucose)
+    // 3: Lipids - golden yellow
+    // 4: Proteins - light blue (like albumin)
+    // 5: Nucleic acids - magenta (DNA)
+    // 6: Cell membrane - orange-brown (phospholipid heads)
+    // 7: Organelles - bright green
+    // 8: Electrons - electric purple
+    // 9: Nutrients - bright green (glucose)
+    // 10: Protons - red (acidic)
+    // 11: Living cells - translucent cyan
+    // 12: Dead cells - dark brown/black
+    // 13: Viruses - purple-red
+    
     colors = {
-        glm::vec4(0.0f, 1.0f, 1.0f, 1.0f),  //  1 cyan
-        glm::vec4(1.0f, 0.0f, 0.0f, 1.0f),  //  2 red
-        glm::vec4(0.0f, 1.0f, 0.0f, 1.0f),  //  3 green
-        glm::vec4(1.0f, 0.0f, 1.0f, 1.0f),  //  4 magenta
-        glm::vec4(1.0f, 1.0f, 0.0f, 1.0f),  //  5 yellow
-        glm::vec4(0.0f, 0.0f, 1.0f, 1.0f),  //  6 blue
-        glm::vec4(1.0f, 0.5f, 0.0f, 1.0f),  //  7 orange
-        glm::vec4(0.5f, 0.0f, 1.0f, 1.0f),  //  8 violet
-        glm::vec4(0.0f, 1.0f, 0.5f, 1.0f),  //  9 spring green
-        glm::vec4(1.0f, 1.0f, 1.0f, 1.0f),  // 10 white
+        glm::vec4(0.6f, 0.8f, 1.0f, 0.7f),  // 0 Water - clear, slightly blue
+        glm::vec4(0.8f, 0.8f, 0.9f, 1.0f),  // 1 Ions - metallic silver
+        glm::vec4(1.0f, 0.9f, 0.5f, 1.0f),  // 2 Simple molecules - pale yellow
+        glm::vec4(1.0f, 0.9f, 0.2f, 1.0f),  // 3 Lipids - golden
+        glm::vec4(0.6f, 0.8f, 1.0f, 1.0f),  // 4 Proteins - light blue
+        glm::vec4(0.9f, 0.2f, 0.8f, 1.0f),  // 5 Nucleic acids - magenta (DNA)
+        glm::vec4(0.9f, 0.5f, 0.2f, 1.0f),  // 6 Cell membrane - orange-brown
+        glm::vec4(0.2f, 0.9f, 0.4f, 1.0f),  // 7 Organelles - bright green
+        glm::vec4(0.8f, 0.2f, 1.0f, 1.0f),  // 8 Electrons - electric purple
+        glm::vec4(0.3f, 1.0f, 0.3f, 1.0f),  // 9 Nutrients - bright green
+        glm::vec4(1.0f, 0.2f, 0.2f, 1.0f),  // 10 Protons - red (acidic)
+        glm::vec4(0.2f, 1.0f, 0.9f, 0.8f),  // 11 Living cells - cyan, semi-transparent
+        glm::vec4(0.3f, 0.2f, 0.1f, 1.0f),  // 12 Dead cells - dark brown
+        glm::vec4(0.8f, 0.2f, 0.6f, 1.0f),  // 13 Viruses - purple-red
     };
     colors.resize(MAX_PARTICLE_TYPES, glm::vec4(1.0f));
+}
+
+void Particles::gen_default_colors() {
+    gen_biochemical_colors();
 }
 
 void Particles::set_palette(int index) {
@@ -245,100 +376,94 @@ float Particles::rand_range_f(float lo, float hi) {
 }
 
 // ── Archetype presets ─────────────────────────────────────────────────────────
-// Each preset clears then sets behavior_flags for `type` and seeds the
-// corresponding row of the force matrix.  The UI can still hand-edit forces.
+// Each preset sets behavior_flags AND seeds the force-matrix row for `type`.
+// These represent biochemical behaviors for cellular/molecular realism.
 
-static void set_row(std::vector<float>& forces, uint32_t type, float self_val, float cross_val) {
+static void set_row_all(std::vector<float>& forces, uint32_t type, float self_val, float cross_val) {
     for (uint32_t b = 0; b < MAX_PARTICLE_TYPES; ++b) {
         uint32_t fi = type + b * MAX_PARTICLE_TYPES;
-        forces[fi]  = (b == type) ? self_val : cross_val;
+        forces[fi] = (b == type) ? self_val : cross_val;
     }
 }
 
 void Particles::apply_preset_default(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
     behavior_flags[type] = BEHAVIOR_NONE;
-    // Leave force matrix as-is (user-controlled)
 }
 
 void Particles::apply_preset_repeller(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_REPEL;
-    set_row(forces, type, -0.8f, -0.8f);
+    behavior_flags[type] = BEHAVIOR_CHARGE;
+    set_row_all(forces, type, -0.5f, -0.3f); // Charged particles repel like charges
 }
 
 void Particles::apply_preset_polar(uint32_t type, uint32_t active_types) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_POLAR;
-    // Strong self-attraction to form chains; random-ish cross forces
-    set_row(forces, type, 0.4f, 0.0f);
-    // Give slight positive force toward all active types to mix into the soup
-    for (uint32_t b = 0; b < active_types; ++b) {
-        if (b == type) continue;
-        forces[type + b * MAX_PARTICLE_TYPES] = 0.15f;
-    }
+    behavior_flags[type] = BEHAVIOR_SOLUBLE;
+    set_row_all(forces, type, 0.4f, 0.1f); // Attract water, mild other attraction
 }
 
 void Particles::apply_preset_heavy(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_HEAVY;
-    set_row(forces, type, -0.2f, -0.2f);
+    behavior_flags[type] = BEHAVIOR_STRUCTURAL;
+    set_row_all(forces, type, 0.8f, 0.3f);
 }
 
 void Particles::apply_preset_catalyst(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_CATALYST;
-    set_row(forces, type, 0.1f, 0.2f);
+    behavior_flags[type] = BEHAVIOR_ENZYME;
+    set_row_all(forces, type, 0.3f, 0.5f);
 }
 
 void Particles::apply_preset_membrane(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_NONE;  // pure force-matrix behaviour
-    set_row(forces, type, 0.7f, -0.4f);
+    behavior_flags[type] = BEHAVIOR_MEMBRANE | BEHAVIOR_STICKY;
+    set_row_all(forces, type, 0.7f, -0.3f);
 }
 
 void Particles::apply_preset_viral(uint32_t type, uint32_t active_types) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_VIRAL;
-    // Strong attraction toward all types to get close enough to infect
-    set_row(forces, type, 0.6f, 0.6f);
-    (void)active_types;  // unused, kept for API symmetry
+    behavior_flags[type] = BEHAVIOR_VIRION;
+    set_row_all(forces, type, 0.2f, 0.8f);
+    (void)active_types;
 }
 
 void Particles::apply_preset_leech(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_LEECH;
-    // Moderate attraction to drain energy
-    set_row(forces, type, 0.2f, 0.4f);
+    behavior_flags[type] = BEHAVIOR_TOXIC;
+    set_row_all(forces, type, 0.2f, 0.4f);
 }
 
 void Particles::apply_preset_shield(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_SHIELD;
-    // Defensive repeller
-    set_row(forces, type, 0.1f, -0.3f);
+    behavior_flags[type] = BEHAVIOR_RECEPTOR;
+    set_row_all(forces, type, 0.4f, 0.0f);
 }
 
+// Proton: charged + toxic
 void Particles::apply_preset_proton(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_HEAVY | BEHAVIOR_POSITIVE;
-    set_row(forces, type, 0.1f, 0.0f);
+    behavior_flags[type] = BEHAVIOR_CHARGE | BEHAVIOR_TOXIC;
+    set_row_all(forces, type, -0.3f, -0.2f);
 }
 
+// Electron: highly reactive radical
 void Particles::apply_preset_electron(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_NEGATIVE;
-    set_row(forces, type, 0.1f, 0.0f);
+    behavior_flags[type] = BEHAVIOR_TOXIC;
+    set_row_all(forces, type, -0.7f, -0.3f);
 }
 
+// Positive monopole: attracted to negative charges
 void Particles::apply_preset_pos_monopole(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_POSITIVE;
-    set_row(forces, type, 0.0f, 0.0f);
+    behavior_flags[type] = BEHAVIOR_CHARGE;
+    set_row_all(forces, type, -0.2f, 0.5f);
 }
 
+// Negative monopole
 void Particles::apply_preset_neg_monopole(uint32_t type) {
     if (type >= MAX_PARTICLE_TYPES) return;
-    behavior_flags[type] = BEHAVIOR_NEGATIVE;
-    set_row(forces, type, 0.0f, 0.0f);
+    behavior_flags[type] = BEHAVIOR_CHARGE;
+    set_row_all(forces, type, -0.2f, 0.5f);
 }

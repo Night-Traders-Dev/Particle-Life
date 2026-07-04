@@ -66,11 +66,11 @@ TEST_CASE(Particles_apply_preset_repeller) {
     TestParticles p;
     p.behavior_flags[3] = BEHAVIOR_NONE;
     p.forces[3 + 0 * MAX_PARTICLE_TYPES] = 0.5f; // pre-existing
-    p.behavior_flags[3] = BEHAVIOR_REPEL;
+    p.behavior_flags[3] = BEHAVIOR_MEMBRANE;
     for (int b = 0; b < MAX_PARTICLE_TYPES; ++b)
         p.forces[3 + b * MAX_PARTICLE_TYPES] = -0.8f;
 
-    ASSERT_INT_EQ(p.behavior_flags[3], BEHAVIOR_REPEL, "repeller flag set");
+    ASSERT_INT_EQ(p.behavior_flags[3], BEHAVIOR_MEMBRANE, "membrane flag set");
     ASSERT_FLOAT_EQ(p.forces[3 + 0 * MAX_PARTICLE_TYPES], -0.8f, 1e-4f, "force overwritten");
     return true;
 }
@@ -78,11 +78,11 @@ TEST_CASE(Particles_apply_preset_repeller) {
 TEST_CASE(Particles_apply_preset_viral) {
     TestParticles p;
     p.behavior_flags[5] = BEHAVIOR_NONE;
-    p.behavior_flags[5] = BEHAVIOR_VIRAL;
+    p.behavior_flags[5] = BEHAVIOR_VIRION;
     for (int b = 0; b < MAX_PARTICLE_TYPES; ++b)
         p.forces[5 + b * MAX_PARTICLE_TYPES] = 0.6f;
 
-    ASSERT_INT_EQ(p.behavior_flags[5], BEHAVIOR_VIRAL, "viral flag set");
+    ASSERT_INT_EQ(p.behavior_flags[5], BEHAVIOR_VIRION, "virion flag set");
     ASSERT_FLOAT_EQ(p.forces[5 + 5 * MAX_PARTICLE_TYPES], 0.6f, 1e-4f, "self force set");
     return true;
 }

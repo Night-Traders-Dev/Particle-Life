@@ -78,50 +78,95 @@ void Simulation::reset() {
     vkDeviceWaitIdle(vk.device);
     particles.gen_data(cfg);
 
-    // Trophic-level energy depletion rates:
-    //   Producers (0-2):  low   = 0.3        (photosynthesise)
-    //   Herbivores (3-5): med   = 0.6        (graze on plants)
-    //   Predators  (6-8): high  = 1.2        (hunt)
-    //   Food       (9):   zero  = 0.0
+    // Biochemical energy depletion rates per type:
+    //   Water (0):       none    (solvent, no cost)
+    //   Ions (1):        low     (pumping cost)
+    //   Simple (2):      low     (diffusion limited)
+    //   Lipids (3):      none    (neutral)
+    //   Proteins (4):    medium  (enzymatic activity)
+    //   Nucleic (5):     medium  (DNA maintenance)
+    //   Cell Mem (6):    none    (structural)
+    //   Organelle (7):   high    (active processes)
+    //   Electron (8):    n/a     (reactive, transient)
+    //   Nutrient (9):    none    (food source)
+    //   Proton (10):     high    (acidic, reactive)
+    //   Cell (11):       high    (metabolism)
+    //   Dead Cell (12):  decay   (decomposes to nutrients)
+    //   Virus (13):      low     (passive until infection)
     for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
-        if (t == FOOD_TYPE_INDEX) {
-            cfg.energy_depletion_rates[t] = 0.0f;
-        } else if (t < 3) {
-            cfg.energy_depletion_rates[t] = 0.3f;
-        } else if (t < 6) {
-            cfg.energy_depletion_rates[t] = 0.6f;
+        if (t == TYPE_WATER || t == TYPE_LIPIDS || t == TYPE_CELL_MEM || t == TYPE_NUTRIENT) {
+            cfg.energy_depletion_rates[t] = 0.0f;  // No energy cost
+        } else if (t == TYPE_IONS || t == TYPE_SIMPLE || t == TYPE_VIRUS) {
+            cfg.energy_depletion_rates[t] = 0.2f;  // Low
+        } else if (t == TYPE_PROTEINS || t == TYPE_NUCLEIC) {
+            cfg.energy_depletion_rates[t] = 0.5f;  // Medium
+        } else if (t == TYPE_ORGANELLE || t == TYPE_PROTON || t == TYPE_CELL) {
+            cfg.energy_depletion_rates[t] = 1.0f;  // High
+        } else if (t == TYPE_DEAD_CELL) {
+            cfg.energy_depletion_rates[t] = 0.8f;  // Decomposing
         } else {
-            cfg.energy_depletion_rates[t] = 1.2f;
+            cfg.energy_depletion_rates[t] = 0.3f;  // Default
         }
     }
 
-    // Trophic-level behavior flags:
-    //   Producers:  none (just sit and photosynthesise)
-    //   Herbivores: BEHAVIOR_FOOD (predators can eat them via food-drain logic)
-    //   Predators:  BEHAVIOR_PREDATOR (hunt non-predator, non-food particles)
-    //   Food:       BEHAVIOR_FOOD (legacy food particles)
-    for (uint32_t t = 0; t < MAX_PARTICLE_TYPES; ++t) {
-        if (t == FOOD_TYPE_INDEX) {
-            particles.behavior_flags[t] = BEHAVIOR_FOOD;
-        } else if (t < 3) {
-            particles.behavior_flags[t] = BEHAVIOR_NONE;
-        } else if (t < 6) {
-            particles.behavior_flags[t] = BEHAVIOR_FOOD;
-        } else {
-            particles.behavior_flags[t] = BEHAVIOR_PREDATOR;
-        }
-    }
+    // Biochemical behavior flags initialization:
+    // Type 0: Water - universal solvent, highly mobile
+    particles.behavior_flags[TYPE_WATER]      = BEHAVIOR_SOLUBLE;
+    
+    // Type 1: Ions - charged particles, interact via ionic bonds
+    particles.behavior_flags[TYPE_IONS]     = BEHAVIOR_SOLUBLE | BEHAVIOR_CHARGE;
+    
+    // Type 2: Simple molecules - soluble nutrients/gases
+    particles.behavior_flags[TYPE_SIMPLE]     = BEHAVIOR_SOLUBLE | BEHAVIOR_NUTRIENT;
+    
+    // Type 3: Lipids - form membranes, hydrophobic
+    particles.behavior_flags[TYPE_LIPIDS]     = BEHAVIOR_MEMBRANE;
+    
+    // Type 4: Proteins - enzymes and structural, catalytic
+    particles.behavior_flags[TYPE_PROTEINS]   = BEHAVIOR_RECEPTOR | BEHAVIOR_ENZYME | BEHAVIOR_STRUCTURAL;
+    
+    // Type 5: Nucleic acids - genetic material, templating
+    particles.behavior_flags[TYPE_NUCLEIC]    = BEHAVIOR_RECEPTOR | BEHAVIOR_STRUCTURAL;
+    
+    // Type 6: Cell membrane - forms barriers
+    particles.behavior_flags[TYPE_CELL_MEM]   = BEHAVIOR_MEMBRANE | BEHAVIOR_STICKY;
+    
+    // Type 7: Organelles - active cellular components
+    particles.behavior_flags[TYPE_ORGANELLE]  = BEHAVIOR_METABOLIC | BEHAVIOR_SIGNALING;
+    
+    // Type 8: Electrons - highly reactive, toxic radicals
+    particles.behavior_flags[TYPE_ELECTRON]   = BEHAVIOR_TOXIC;
+    
+    // Type 9: Nutrients - food source for all metabolic particles
+    particles.behavior_flags[TYPE_NUTRIENT]   = BEHAVIOR_NUTRIENT;
+    
+    // Type 10: Protons - acidic, reactive
+    particles.behavior_flags[TYPE_PROTON]     = BEHAVIOR_CHARGE | BEHAVIOR_TOXIC;
+    
+    // Type 11: Living cells - autonomous organisms
+    particles.behavior_flags[TYPE_CELL]       = BEHAVIOR_CELL | BEHAVIOR_METABOLIC | BEHAVIOR_SIGNALING;
+    
+    // Type 12: Dead cells - decompose to nutrients
+    particles.behavior_flags[TYPE_DEAD_CELL]  = BEHAVIOR_DECOMPOSER;
+    
+    // Type 13: Viruses - infect cells
+    particles.behavior_flags[TYPE_VIRUS]      = BEHAVIOR_VIRION;
 
     compute.clear_buffers(vk);
     compute.create_buffers(vk, particles);
     organism_manager.reset();
 
-    // Initialize species records
+    // Initialize species records with biochemical starting values
     for (uint32_t t = 0; t < cfg.particle_types; ++t) {
         organism_manager.species_records[t] = {};
-        organism_manager.species_records[t].avg_self_mod = 0.8f + (float)t * 0.1f;
-        organism_manager.species_records[t].avg_cross_mod = 0.8f;
-        organism_manager.species_records[t].avg_lifespan = 300.0f;
+        // Default binding affinity varies by type category
+        if (t == TYPE_CELL || t == TYPE_PROTEINS || t == TYPE_NUCLEIC) {
+            organism_manager.species_records[t].avg_self_mod = 1.2f;  // Strong binding
+        } else {
+            organism_manager.species_records[t].avg_self_mod = 0.8f + (float)t * 0.05f;
+        }
+        organism_manager.species_records[t].avg_cross_mod = 0.6f;
+        organism_manager.species_records[t].avg_lifespan = DEFAULT_LIFESPAN;
     }
 
     organism_tick_counter_ = 0;
@@ -363,10 +408,10 @@ void Simulation::tick(GLFWwindow* window, double dt) {
                     uint32_t t = readback_types_[i];
                     if (t < MAX_PARTICLE_TYPES) { type_counts[t]++; total++; }
                     total_energy += particles.energy[i];
-                    if (t == FOOD_TYPE_INDEX && particles.types[i] != FOOD_TYPE_INDEX)
+                    if (t < MAX_PARTICLE_TYPES && particles.types[i] != FOOD_TYPE_INDEX)
                         current_deaths++;
                     if (t < MAX_PARTICLE_TYPES &&
-                        (particles.behavior_flags[t] & BEHAVIOR_PREDATOR) != 0u)
+                        (particles.behavior_flags[t] & BEHAVIOR_CELL) != 0u)
                         pred_energy += particles.energy[i];
                 }
                 iface.current_diversity = iface.simpson_diversity(type_counts, cfg.particle_types, total);
@@ -892,35 +937,8 @@ void Simulation::spawn_seasonal_food() {
 }
 
 void Simulation::update_seasonal_migration() {
-    // Migrator types seek their preferred temperature band by adjusting
-    // their movement bias toward warmer/colder regions.
-    // Temperature roughly maps to latitude (y-axis).
-    for (uint32_t i = 0; i < cfg.particle_count; ++i) {
-        if (i >= readback_types_.size()) break;
-        uint32_t t = readback_types_[i];
-        if (t >= MAX_PARTICLE_TYPES) continue;
-        uint32_t flags = particles.behavior_flags[t];
-        if ((flags & BEHAVIOR_MIGRATOR) == 0) continue;
-
-        float world_y = readback_positions_[i].y;
-        float half_h = float(REGION_H) * 1.5f;
-
-        // Preferred temperature maps to preferred y-position
-        // Type 0 = cold-loving (north), Type 8 = heat-loving (south)
-        float preferred_band = ((float)t / 8.0f) * 2.0f - 1.0f; // -1 to 1
-        float target_y = preferred_band * half_h;
-
-        // Apply gentle nudging force proportional to distance from preferred band
-        float diff = target_y - world_y;
-        float force = diff * 0.0001f;
-
-        // Only apply if actual temperature differs
-        float temp = cfg.current_temperature;
-        if (temp > 25.0f && preferred_band < -0.3f) force *= 2.0f; // hot -> go north
-        if (temp < 10.0f && preferred_band > 0.3f) force *= 2.0f;  // cold -> go south
-
-        readback_positions_[i].y += force;
-    }
+    // Biochemical types don't migrate seasonally - this function is kept
+    // for compatibility but does nothing in the cellular simulation
 }
 
 void Simulation::update_niche_construction() {
@@ -966,7 +984,7 @@ void Simulation::init_ecosystem_log(double now) {
     eco_log_.open("ecosystem_log.csv");
     eco_log_ << "time,frame,total_particles,total_energy,diversity,trophic_eff,"
                 "energy_flux,organism_count,avg_gen,temp,wind_x,wind_y,weather,"
-                "pop_0,pop_1,pop_2,pop_3,pop_4,pop_5,pop_6,pop_7,pop_8,pop_9,"
+                "pop_0,pop_1,pop_2,pop_3,pop_4,pop_5,pop_6,pop_7,pop_8,pop_9,pop_10,pop_11,pop_12,pop_13,"
                 "births,deaths,collapse\n";
 
     eco_events_.open("ecosystem_events.log");

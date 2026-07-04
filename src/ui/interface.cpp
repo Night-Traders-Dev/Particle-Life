@@ -377,39 +377,47 @@ void Interface::draw_particle_grid(SimConfig& cfg, Particles& particles) {
 }
 
 void Interface::draw_archetype_panel(Particles& particles, const SimConfig& cfg) {
-    if (!ImGui::CollapsingHeader("Particle Behaviors (Archetypes)")) return;
-    static const char* preset_names[] = { "Custom...", "Default", "Repeller", "Polar", "Heavy", "Catalyst", "Membrane", "Viral", "Leech", "Shield", "Proton", "Electron", "Pos Monopole", "Neg Monopole", "Food" };
-    static const char* flag_names[] = { "REPEL", "POLAR", "HEAVY", "CATALYST", "VIRAL", "LEECH", "SHIELD", "POSITIVE", "NEGATIVE", "FOOD" };
+    if (!ImGui::CollapsingHeader("Particle Behaviors (Biochemical Archetypes)")) return;
+    static const char* preset_names[] = {
+        "Custom...", "Soluble Water", "Charged Ion", "Simple Molecule", "Lipid",
+        "Protein", "Nucleic Acid", "Cell Membrane", "Organelle", "Electron",
+        "Nutrient", "Proton", "Living Cell", "Dead Cell", "Virus"
+    };
+    static const char* flag_names[] = {
+        "SOLUBLE", "CHARGE", "MEMBRANE", "RECEPTOR", "ENZYME",
+        "STRUCTURAL", "SIGNALING", "METABOLIC", "TOXIC", "STICKY",
+        "NUTRIENT", "CELL", "DECOMPOSER", "VIRION"
+    };
     uint32_t pt = cfg.particle_types;
     for (uint32_t t = 0; t < pt; ++t) {
         ImGui::PushID(static_cast<int>(t));
         const glm::vec4& c = particles.colors[t];
         ImGui::ColorButton("##swatch", ImVec4(c.r, c.g, c.b, 1.0f), ImGuiColorEditFlags_NoTooltip, ImVec2(14, 14));
         ImGui::SameLine();
-        if (t == FOOD_TYPE_INDEX) {
-            ImGui::Text("Type %u: FOOD (Energy Source)", t);
+        if (t == TYPE_NUTRIENT) {
+            ImGui::Text("Type %u: Nutrient (Energy Source, no decay)", t);
         } else {
             ImGui::SetNextItemWidth(120.0f);
             if (ImGui::Combo("##preset", &preset_selection[t], preset_names, 15)) {
                 switch (preset_selection[t]) {
-                case 1:  particles.apply_preset_default(t);              break;
-                case 2:  particles.apply_preset_repeller(t);             break;
-                case 3:  particles.apply_preset_polar(t, pt);            break;
-                case 4:  particles.apply_preset_heavy(t);                break;
-                case 5:  particles.apply_preset_catalyst(t);             break;
-                case 6:  particles.apply_preset_membrane(t);             break;
-                case 7:  particles.apply_preset_viral(t, pt);            break;
-                case 8:  particles.apply_preset_leech(t);                break;
-                case 9:  particles.apply_preset_shield(t);               break;
-                case 10: particles.apply_preset_proton(t);               break;
-                case 11: particles.apply_preset_electron(t);             break;
-                case 12: particles.apply_preset_pos_monopole(t);         break;
-                case 13: particles.apply_preset_neg_monopole(t);         break;
-                case 14: particles.behavior_flags[t] = BEHAVIOR_FOOD;    break;
+                case 1: particles.apply_preset_default(t); break;       // Soluble Water
+                case 2: particles.apply_preset_repeller(t); break;        // Charged Ion
+                case 3: particles.apply_preset_polar(t, pt); break;      // Simple Molecule
+                case 4: particles.apply_preset_heavy(t); break;          // Lipid
+                case 5: particles.apply_preset_catalyst(t); break;       // Protein
+                case 6: particles.apply_preset_shield(t); break;         // Nucleic Acid
+                case 7: particles.apply_preset_membrane(t); break;         // Cell Membrane
+                case 8: particles.apply_preset_viral(t, pt); break;        // Organelle
+                case 9: particles.apply_preset_electron(t); break;       // Electron
+                case 10: particles.apply_preset_proton(t); break;        // Nutrient
+                case 11: particles.apply_preset_proton(t); break;        // Proton
+                case 12: particles.apply_preset_viral(t, pt); break;     // Living Cell
+                case 13: particles.apply_preset_viral(t, pt); break;     // Dead Cell
+                case 14: particles.apply_preset_viral(t, pt); break;     // Virus
                 }
             }
             uint32_t& flags = particles.behavior_flags[t];
-            for (int fi = 0; fi < 10; ++fi) {
+            for (int fi = 0; fi < 14; ++fi) {
                 ImGui::SameLine();
                 bool bit = (flags & (1u << fi)) != 0;
                 if (ImGui::Checkbox(flag_names[fi], &bit)) {

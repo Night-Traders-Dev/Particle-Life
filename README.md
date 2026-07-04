@@ -3,14 +3,12 @@
 ![C++](https://img.shields.io/badge/C%2B%2B-20-blue)
 ![Vulkan](https://img.shields.io/badge/Vulkan-1.2-green)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
-![Tests](https://img.shields.io/badge/tests-66%20passed%2F66-success)
-![Score](https://img.shields.io/badge/score-100%25-brightgreen)
 
-A GPU-accelerated particle life simulation with biologically-inspired emergent behaviour,
+A GPU-accelerated particle life simulation with **biochemically-inspired emergent behaviour**,
 evolution, and ecosystem dynamics. Thousands of particles interact through configurable
 force matrices, self-organise into organisms, speciate when their genome diverges, and
-exhibit specialised behaviour through typed archetypes — complete with live weather,
-predator-prey dynamics, seasonal migration, niche construction, and real-time analytics.
+exhibit specialized behaviour through typed archetypes — complete with day/night cycles,
+temperature effects, and real-time analytics.
 
 Written in C++20 with Vulkan compute shaders and Dear ImGui.
 
@@ -18,50 +16,47 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
 
 ## Features
 
-### Ecological Simulation
-- **Mitosis / Reproduction:** High-energy particles (> 1.5) can reproduce — dead particle slots are recycled by spawning near a thriving parent, inheriting its type and momentum
-- **Energy Inheritance:** Offspring inherit ~40% of parent energy at birth — parents pay an energy cost (0.3 for non-food, 0.1 for food)
-- **Seed Dispersal:** Offspring scatter at 4–34× radius in random direction, preventing overcrowding and encouraging territory spread
-- **Corpse Decay:** Dead particles convert into static food corpses (type 9) where they die, returning organic matter to the ecosystem
-- **Food Decomposition:** Uneaten food slowly decays over time, preventing infinite accumulation
-- **Per-type Metabolism:** Each particle type drains energy at a different rate (type 0 = 0.5×, type 8 = 2.0×), creating energy-budget specialization
-- **Natural Selection:** Types that feed efficiently and reproduce outcompete others organically
-- **Cross-Species Reproduction (Two-Parent Hybridization):**
-  - Two particles of different types can mate with probability `cross_repro_rate` (default 15%)
-  - Offspring genome is a **blend** of both parents' `self_mod`, `cross_mod`, `lifespan`, `adhesion`, `division_rate`, and `defense` using `mix()`
-  - Offspring type may come from either parent, enabling true inter-species gene flow
-  - Higher energy cost (0.5 from parent1, 0.25 from parent2) compared to single-parent mitosis (0.3)
-  - Hybrid offspring gain a slightly wider behavior-flag mutation range
-- **Horizontal Gene Transfer (HGT):**
-  - Within the same organism, nearby bonded particles exchange genome traits (`self_mod`, `cross_mod`, `adhesion`, `defense`) probabilistically
-  - Creates organism-level genetic cohesion independent of reproduction
-- **Multicellular Spring Forces:**
-  - Particles sharing the same `organism_id` are pulled toward a rest length (~3× interaction radius) proportional to `adhesion`
-  - Creates stretchy membranes and cohesive multicellular clusters
-- **CPU-Side Organism ID Writeback:** `OrganismManager` computes clusters on CPU; detected organism IDs are written back to the particle array and re-uploaded to GPU each detection cycle
+### Biochemical Ecosystem
 
-### Predator-Prey Dynamics
-- **Predator Pursuit:** PREDATOR-flagged particles actively steer toward nearby prey in addition to force-matrix interactions
-- **Prey Conversion:** Predators convert nearby prey on contact, gaining energy reward (0.3)
-- **Food Web:** Energy flows from food (type 9) → herbivores → predators through feeding and conversion chains
-- **Co-evolution:** Parasite–host arms race tracked via infectivity and resistance scores across generations
+Instead of a traditional predator-prey model, particles now simulate molecular and
+cellular biology with 14 biochemical types:
 
-### Speciation & Evolution
-- **Speciation:** When a type's genome (self_mod/cross_mod expression) diverges 40%+ from baseline, the population can split into a new type slot — true evolution in real time
-- **Heritable Traits:** self_mod, cross_mod, and lifespan mutate during reproduction (±15% on trait values)
-- **Behavior Flag Mutation:** Small chance (2%) for offspring to gain/lose a random behavior flag, enabling drift adaptation
-- **Generation Tracking:** Each mitosis increments the generation counter; average generation displayed in HUD
+| Type | Role | Behavior |
+|------|------|----------|
+| **Water (0)** | Universal solvent | Highly mobile, hydrates ions |
+| **Ions (1)** | Charged particles | Form hydration shells, ionic bonds |
+| **Simple (2)** | Small molecules | Dissolved nutrients/gases |
+| **Lipids (3)** | Hydrophobic | Form lipid bilayers, hydrophobic exclusion |
+| **Proteins (4)** | Enzymes/structure | Catalysis, binding, structural support |
+| **Nucleic (5)** | DNA/RNA | Genetic information, templating |
+| **Cell Mem (6)** | Membrane | Cell barriers, sticky adhesion |
+| **Organelles (7)** | Cellular machinery | Active processes, signaling |
+| **Electrons (8)** | Reactive radicals | Highly toxic, short-lived |
+| **Nutrients (9)** | Energy source | Food for metabolic entities |
+| **Protons (10)** | H+ ions | Acidic, highly reactive |
+| **Cells (11)** | Living organisms | Autonomous, metabolic, signaling |
+| **Dead Cells (12)** | Decomposing matter | Attracts decomposers |
+| **Viruses (13)** | Infectious particles | Seek host cells |
+
+### Cellular Life Cycle
+
+- **Mitosis/Reproduction:** High-energy cells can reproduce, inheriting genome traits
+- **Energy Budget:** Each type has different metabolic costs (water/nutrients free, organelles/cells high)
+- **Corpse Decomposition:** Dead cells become decomposing matter, slowly converting to nutrients
+- **Natural Selection:** Efficient metabolizers outcompete others; population dynamics emerge
+
+### Genome & Evolution
+
+- **Heritable Traits:** age, lifespan, self_mod, cross_mod, generation, adhesion
+- **Mutation:** ±15% trait variation during reproduction
+- **Speciation:** Genetic divergence creates new types organically
 
 ### Physics Engine
+
 - Up to ~50,000+ particles simulated in real time on the GPU
-- **Spatial Hash Grid:** O(n) neighbour lookups via a GPU-side grid (60-unit cells) with prefix-sum sorting
-- **Hard-Sphere Collision:** Position correction + velocity bounce when particles overlap (prevents phasing)
-- **Flocking / Schooling:** FLOCKING-flagged particles align velocity with nearby same-type neighbors (boids alignment term)
-- **Per-type Radius:** Each type has an independent base radius — "whales" and "plankton" coexist visually and physically
-- **Brownian Motion:** Temperature-dependent thermal noise — particles jitter more during daytime, less at night
-- **Fluid Viscosity:** Density-dependent Stokes drag — dense clusters experience higher resistance
-- Configurable repulsion radius, interaction radius, dampening, density limiting, and per-type radii
-- Double-buffered ping-pong position/velocity buffers for data-race-free updates
+- **Spatial Hash Grid:** O(n) neighbour lookups via GPU-side grid
+- **Hard-Sphere Collision:** Prevents particle phasing
+- **Per-type Radius:** Lipids (large), ions (small) coexist physically
 
 ### Day/Night Cycle
 - **Real-time 24-hour cycle** — time of day matches your wall clock (6:00 sunrise, 8:00–18:00 day, 18:00 sunset, 20:00 night)
@@ -109,7 +104,7 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
 - Creates feedback loops: terrain shapes behaviour, behaviour shapes terrain
 
 ### Force Matrix & Grid
-- Up to 10 particle types, each pair with an independent attraction/repulsion scalar
+- 14 particle types, each pair with an independent attraction/repulsion scalar (biochemical compatibility)
 - Interactive grid:
   - Hover + scroll: adjust force
   - Right-click: zero force
@@ -117,25 +112,27 @@ Written in C++20 with Vulkan compute shaders and Dear ImGui.
   - **Randomize:** Instantly randomize all force values
 - Per-type colour pickers
 
-### Particle Archetypes
-Selectable behaviours per type:
+### Particle Behaviors (Biochemical Archetypes)
+Selectable behaviours per type via checkboxes:
 
-| Archetype | Shader Flag | Effect |
-|-----------|-------------|--------|
-| **Default** | — | Force matrix only |
-| **Repeller** | `REPEL` | Overrides force matrix — always repels all types |
-| **Polar** | `POLAR` | Magnetic dipole: attraction modulated by relative dipole alignment |
-| **Heavy** | `HEAVY` | Force response scaled to 0.25×; acts as a structural nucleus |
-| **Catalyst** | `CATALYST` | Nearby particles lose less energy each step |
-| **Membrane** | — | Force matrix preset: strong self-attraction, repels others |
-| **Viral** | `VIRAL` | Converts adjacent non-viral particles to its own type |
-| **Leech** | `LEECH` | Drains energy from neighbouring particles |
-| **Shield** | `SHIELD` | Resistant to viral infection and energy drain |
-| **Proton** | `HEAVY + POSITIVE` | Heavy particle with positive charge |
-| **Electron** | `NEGATIVE` | Light particle with negative charge |
-| **Food** | `FOOD` | Static energy source consumed by other particles |
-| **Flocker** | `FLOCKING` | Aligns velocity with nearby same-type neighbours (boids) |
-| **Migrator** | `MIGRATOR` | Seeks preferred temperature band (seasonal latitude movement) |
+| Behavior | Flag | Effect |
+|----------|------|--------|
+| **SOLUBLE** | 1 | Dissolves in aqueous environment; high mobility |
+| **CHARGE** | 2 | Forms ionic bonds; charged interactions |
+| **MEMBRANE** | 4 | Forms lipid bilayers; surface tension |
+| **RECEPTOR** | 8 | Selective binding; lock-and-key recognition |
+| **ENZYME** | 16 | Catalyzes reactions; reduces neighbor energy decay |
+| **STRUCTURAL** | 32 | Forms scaffolds; low mobility |
+| **SIGNALING** | 64 | Communicates chemically; emits signals |
+| **METABOLIC** | 128 | Consumes nutrients; high energy drain |
+| **TOXIC** | 256 | Damages other particles on contact |
+| **STICKY** | 512 | Adheres to membranes/structures |
+| **NUTRIENT** | 1024 | Energy source; attracts metabolic types |
+| **CELL** | 2048 | Living cell; autonomous behavior |
+| **DECOMPOSER** | 4096 | Breaks down dead cells |
+| **VIRION** | 8192 | Infectious; seeks host cells |
+
+Each type can have multiple behaviors combined (e.g., Proteins = RECEPTOR + ENZYME + STRUCTURAL).
 
 ### Visual Enhancements
 - **Energy-based sizing:** High-energy particles grow larger, starving ones shrink
@@ -283,16 +280,13 @@ shaders/
 ## License
 
 MIT
+
 ---
 
 ## 🧪 Test Suite
 
-| Metric | Value |
-|--------|-------|
-| **Status** | <span style="color:green">**PASSING**</span> |
-| **Last Run** | 2026-07-03 22:04:30 UTC |
-| **Passed** | 66 |
-| **Failed** | 0 |
-| **Score** | 100% |
+Run tests manually:
 
-> Tests are run automatically on every build. Run `bash tests/test_suite` manually to re-run.
+```bash
+bash tests/test_suite
+```

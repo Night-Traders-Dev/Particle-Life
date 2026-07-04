@@ -3,135 +3,142 @@
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
-// Input buffers
-layout(set = 0, binding = 0, std430) buffer InPosBuffer  { vec2  data[]; } in_pos_buffer;
-layout(set = 0, binding = 1, std430) buffer InVelBuffer  { vec2  data[]; } in_vel_buffer;
-layout(set = 0, binding = 2, std430) buffer Types        { uint  data[]; } type_buffer;
-layout(set = 0, binding = 3, std430) buffer Forces       { float data[]; } force_buffer;
-layout(set = 0, binding = 4, std430) buffer Colors       { vec4  data[]; } color_buffer;
-
-// Output buffers
-layout(set = 0, binding = 5, std430) buffer OutPosBuffer { vec2  data[]; } out_pos_buffer;
-layout(set = 0, binding = 6, std430) buffer OutVelBuffer { vec2  data[]; } out_vel_buffer;
-layout(set = 0, binding = 7, rgba32f) uniform image2D out_render_texture;
-
-// Behavior / orientation / energy buffers
-layout(set = 0, binding =  8, std430) buffer Behaviors { uint  data[]; } behavior_buffer;
-layout(set = 0, binding =  9, std430) buffer AngleIn            { float data[]; } angle_in_buffer;
-layout(set = 0, binding = 10, std430) buffer AngVelIn           { float data[]; } avel_in_buffer;
-layout(set = 0, binding = 11, std430) buffer AngleOut           { float data[]; } angle_out_buffer;
-layout(set = 0, binding = 12, std430) buffer AngVelOut          { float data[]; } avel_out_buffer;
-layout(set = 0, binding = 13, std430) buffer EnergyIn           { float data[]; } energy_in_buffer;
-layout(set = 0, binding = 14, std430) buffer EnergyOut          { float data[]; } energy_out_buffer;
-
-// Spatial Grid
-layout(set = 0, binding = 15, std430) buffer GridOffsets        { uint  data[]; } grid_offsets;
-layout(set = 0, binding = 16, std430) buffer SortedIndices      { uint  data[]; } sorted_indices;
-
-struct ConversionData {
-    int  target_type;
-    float probability;
-    uint padding[2];
-};
-layout(set = 0, binding = 17, std430) readonly buffer Conversions { ConversionData data[]; } conversion_buffer;
-
-// Per-particle genome (age, lifespan, heritable traits)
+// Genome struct (32-byte aligned for std430)
 struct Genome {
     float age;
     float lifespan;
     float self_mod;
     float cross_mod;
-    uint  generation;
-    float adhesion;       // bond strength within an organism
-    float division_rate;  // reproduction speed modifier
-    float defense;        // resistance to predation / conversion
+    uint generation;
+    float adhesion;
+    float division_rate;
+    float defense;
 };
+
+// Input buffers
+layout(set = 0, binding = 0, std430) buffer InPosBuffer    { vec2 data[]; } in_pos_buffer;
+layout(set = 0, binding = 1, std430) buffer InVelBuffer    { vec2 data[]; } in_vel_buffer;
+layout(set = 0, binding = 2, std430) buffer Types        { uint data[]; } type_buffer;
+layout(set = 0, binding = 3, std430) buffer Forces       { float data[]; } force_buffer;
+layout(set = 0, binding = 4, std430) buffer Colors       { vec4 data[]; } color_buffer;
+
+// Output buffers
+layout(set = 0, binding = 5, std430) buffer OutPosBuffer { vec2 data[]; } out_pos_buffer;
+layout(set = 0, binding = 6, std430) buffer OutVelBuffer { vec2 data[]; } out_vel_buffer;
+layout(set = 0, binding = 7, rgba32f) uniform image2D out_render_texture;
+
+// Behavior flags (shared, static per reset)
+layout(set = 0, binding = 8,  std430) buffer Behaviors { uint data[]; } behavior_buffer;
+
+// Polar orientation buffers (bindings 9-12) - kept for compatibility
+layout(set = 0, binding = 9,  std430) buffer AngleIn       { float data[]; } angle_in_buffer;
+layout(set = 0, binding = 10, std430) buffer AngularVelIn   { float data[]; } avel_in_buffer;
+layout(set = 0, binding = 11, std430) buffer AngleOut       { float data[]; } angle_out_buffer;
+layout(set = 0, binding = 12, std430) buffer AngularVelOut  { float data[]; } avel_out_buffer;
+
+// Energy buffers (bindings 13-14)
+layout(set = 0, binding = 13, std430) buffer EnergyIn  { float data[]; } energy_in_buffer;
+layout(set = 0, binding = 14, std430) buffer EnergyOut { float data[]; } energy_out_buffer;
+
+// Spatial Grid (bindings 15-16)
+layout(set = 0, binding = 15, std430) buffer GridOffsets   { uint data[]; } grid_offsets;
+layout(set = 0, binding = 16, std430) buffer SortedIndices { uint data[]; } sorted_indices;
+
+// Conversion matrix (binding 17)
+layout(set = 0, binding = 17, std430) readonly buffer Conversions { float data[]; } conversion_force;
+
+// Genome buffers (bindings 23-24)
 layout(set = 0, binding = 23, std430) buffer GenomeIn  { Genome data[]; } genome_in;
 layout(set = 0, binding = 24, std430) buffer GenomeOut { Genome data[]; } genome_out;
 
-// Chemical signal grid (CHEM_W x CHEM_H, single float per cell)
+// Signal grid (binding 25)
 layout(set = 0, binding = 25, std430) buffer SignalGrid { float data[]; } signal_grid;
 
-// Terrain obstacle grid (CHEM_W x CHEM_H, 0.0 = free, 1.0 = solid obstacle)
+// Terrain grid (binding 26)
 layout(set = 0, binding = 26, std430) buffer TerrainGrid { float data[]; } terrain_grid;
 
-// Memory map (per-particle persistent signal memory, vec2 = position + value)
-layout(set = 0, binding = 27, std430) buffer MemoryMap { vec2 data[]; } memory_map;
-layout(set = 0, binding = 28, std430) buffer MemoryMapOut { vec2 data[]; } memory_map_out;
-
-// Per-particle organism membership (0 = free particle)
+// Organism ID buffer (binding 29)
 layout(set = 0, binding = 29, std430) buffer OrganismID { uint data[]; } organism_id;
 
 // Push constants
 layout(push_constant, std430) uniform Params {
-    vec2  region_size;        //   0
-    vec2  camera_origin;      //   8
-    uint  particle_count;     //  16
-    uint  particle_types;     //  20
-    uint  step;               //  24
-    float dt;                 //  28
-    float camera_zoom;        //  32
-    float radius;             //  36
-    float dampening;          //  40
-    float repulsion_radius;   //  44
-    float interaction_radius; //  48
-    float density_limit;      //  52
-    float metabolism;         //  56
-    float infection_rate;     //  60
-    float spawn_probability;  //  64
-    uint  halo_count;         //  68
-    float trail_decay;        //  72
-    float bloom_threshold;    //  76
-    float bloom_intensity;    //  80
-    float vignette_strength;  //  84
-    float halo_intensity;     //  88
-    float time_seconds;       //  92
-    uint  effect_flags;       //  96
-    float day_night_factor;   // 100
-    float energy_depletion_rates[10]; // 104 – 143
-    float wind_x;             // 144
-    float wind_y;             // 148
-    uint terrain_obstacle_count; // 152
-    float current_temperature; // 156
-    float type_radius[10];           // 160
-    float type_metabolic_rate[10];   // 200
-    float type_metamorph_age[10];    // 240
-    int   type_metamorph_target[10]; // 280
-    uint  type_flocking_enabled;     // 320
-    float type_kin_share[10];        // 324
-    float memory_decay;              // 364
-    float memory_strength;           // 368
-    float cross_repro_rate;          // 372
+    vec2  region_size;
+    vec2  camera_origin;
+    uint  particle_count;
+    uint  particle_types;
+    uint  step;
+    float dt;
+    float camera_zoom;
+    float radius;
+    float dampening;
+    float repulsion_radius;
+    float interaction_radius;
+    float density_limit;
+    float metabolism;
+    float infection_rate;
+    float spawn_probability;
+    uint  halo_count;
+    float trail_decay;
+    float bloom_threshold;
+    float bloom_intensity;
+    float vignette_strength;
+    float halo_intensity;
+    float time_seconds;
+    uint effect_flags;
+    float day_night_factor;
+    float energy_depletion_rates[14];
+    float wind_x;
+    float wind_y;
+    uint terrain_obstacle_count;
+    float current_temperature;
+    float type_radius[14];
+    float type_metabolic_rate[14];
+    float type_metamorph_age[14];
+    int type_metamorph_target[14];
+    uint type_flocking_enabled;
+    float type_kin_share[14];
+    float memory_decay;
+    float memory_strength;
+    float cross_repro_rate;
 } params;
 
-// Behavior flag constants (must match ParticleBehavior enum in types.h)
-const uint BEHAVIOR_REPEL    = 1u;
-const uint BEHAVIOR_POLAR    = 2u;
-const uint BEHAVIOR_HEAVY    = 4u;
-const uint BEHAVIOR_CATALYST = 8u;
-const uint BEHAVIOR_VIRAL    = 16u;
-const uint BEHAVIOR_LEECH    = 32u;
-const uint BEHAVIOR_SHIELD   = 64u;
-const uint BEHAVIOR_POSITIVE = 128u;
-const uint BEHAVIOR_NEGATIVE = 256u;
-const uint BEHAVIOR_FOOD     = 512u;
-const uint BEHAVIOR_PREDATOR = 1024u;
-const uint BEHAVIOR_SIGNALER = 2048u;
-const uint BEHAVIOR_FLOCKING = 4096u;
-const uint BEHAVIOR_MIGRATOR = 8192u;
+// Biochemical behavior flags
+const uint BEHAVIOR_SOLUBLE    = 1u;
+const uint BEHAVIOR_CHARGE     = 2u;
+const uint BEHAVIOR_MEMBRANE   = 4u;
+const uint BEHAVIOR_RECEPTOR   = 8u;
+const uint BEHAVIOR_ENZYME     = 16u;
+const uint BEHAVIOR_STRUCTURAL = 32u;
+const uint BEHAVIOR_SIGNALING  = 64u;
+const uint BEHAVIOR_METABOLIC  = 128u;
+const uint BEHAVIOR_TOXIC      = 256u;
+const uint BEHAVIOR_STICKY     = 512u;
+const uint BEHAVIOR_NUTRIENT   = 1024u;
+const uint BEHAVIOR_CELL       = 2048u;
+const uint BEHAVIOR_DECOMPOSER = 4096u;
+const uint BEHAVIOR_VIRION     = 8192u;
+
+// Type indices
+const uint TYPE_WATER      = 0u;
+const uint TYPE_IONS       = 1u;
+const uint TYPE_SIMPLE     = 2u;
+const uint TYPE_LIPIDS     = 3u;
+const uint TYPE_PROTEINS   = 4u;
+const uint TYPE_NUCLEIC    = 5u;
+const uint TYPE_CELL_MEM   = 6u;
+const uint TYPE_ORGANELLE  = 7u;
+const uint TYPE_ELECTRON   = 8u;
+const uint TYPE_NUTRIENT   = 9u;
+const uint TYPE_PROTON     = 10u;
+const uint TYPE_CELL       = 11u;
+const uint TYPE_DEAD_CELL  = 12u;
+const uint TYPE_VIRUS      = 13u;
 
 const uint CHEM_W = 320u;
 const uint CHEM_H = 180u;
 
 const float DEFAULT_LIFESPAN = 300.0f;
 
-const uint EFFECT_TRAIT_DISPLAY = 16u; // 1u << 4
-
-const uint GRID_CELL_SIZE = 60u;
-const uint GRID_W         = (7680u / GRID_CELL_SIZE) + 2u;
-const uint GRID_H         = (4320u / GRID_CELL_SIZE) + 2u;
-
-// https://stackoverflow.com/questions/4200224/random-noise-functions-for-glsl
 float random(float v) {
     return fract(sin(dot(vec2(v, v / 10.123f), vec2(12.9898f, 78.233f))) * 43758.5453f);
 }
@@ -141,16 +148,18 @@ vec2 random2(float v) {
 }
 
 uint get_cell_index(vec2 pos) {
-    int cx = int(floor(pos.x / float(GRID_CELL_SIZE))) % int(GRID_W);
-    int cy = int(floor(pos.y / float(GRID_CELL_SIZE))) % int(GRID_H);
-    if (cx < 0) cx += int(GRID_W);
-    if (cy < 0) cy += int(GRID_H);
+    int cx = int(floor(pos.x / float(7680)));
+    int cy = int(floor(pos.y / float(4320)));
+    const uint GRID_W = 128u;
+    const uint GRID_H = 72u;
+    cx = (cx % int(GRID_W) + int(GRID_W)) % int(GRID_W);
+    cy = (cy % int(GRID_H) + int(GRID_H)) % int(GRID_H);
     return uint(cx + cy * int(GRID_W));
 }
 
 void grid_clear(uint i) {
-    if (i < GRID_W * GRID_H) {
-        grid_offsets.data[i] = 0;
+    if (i < 128u * 72u) {
+        grid_offsets.data[i] = 0u;
     }
 }
 
@@ -161,11 +170,10 @@ void grid_count(uint i) {
     }
 }
 
-// Prefix sum - run with single workgroup
 void grid_prefix_sum() {
-    uint n = GRID_W * GRID_H;
-    uint sum = 0;
-    for (uint j = 0; j < n; j++) {
+    uint n = 128u * 72u;
+    uint sum = 0u;
+    for (uint j = 0u; j < n; j++) {
         sum += grid_offsets.data[j];
         grid_offsets.data[j] = sum;
     }
@@ -174,294 +182,225 @@ void grid_prefix_sum() {
 void grid_sort(uint i) {
     if (i < params.particle_count) {
         uint cell = get_cell_index(in_pos_buffer.data[i]);
-        // grid_offsets currently stores inclusive prefix sum (end of each cell)
-        // We use atomicAdd to get a unique slot for each particle (decrementing from the end)
         uint slot = atomicAdd(grid_offsets.data[cell], -1u);
         sorted_indices.data[slot - 1u] = i;
     }
 }
 
+float compute_biochemical_force(uint type_a, uint type_b, float dist, float proximity) {
+    uint flags_a = behavior_buffer.data[type_a];
+    uint flags_b = behavior_buffer.data[type_b];
+    
+    float attraction = force_buffer.data[type_a + type_b * params.particle_types];
+    
+    bool charge_a = (flags_a & BEHAVIOR_CHARGE) != 0u;
+    bool charge_b = (flags_b & BEHAVIOR_CHARGE) != 0u;
+    if (charge_a && charge_b) {
+        if (type_a == type_b) {
+            attraction -= 0.5f;
+        } else {
+            attraction += 0.5f;
+        }
+    }
+    
+    bool a_membrane = (flags_a & (BEHAVIOR_MEMBRANE | BEHAVIOR_STICKY)) != 0u;
+    bool b_soluble = (flags_b & BEHAVIOR_SOLUBLE) != 0u;
+    bool b_membrane = (flags_b & (BEHAVIOR_MEMBRANE | BEHAVIOR_STICKY)) != 0u;
+    bool a_soluble = (flags_a & BEHAVIOR_SOLUBLE) != 0u;
+    
+    if (a_membrane && b_soluble) attraction -= 0.3f;
+    if (b_membrane && a_soluble) attraction -= 0.3f;
+    
+    if (a_membrane && b_membrane) attraction += 0.4f;
+    
+    bool a_receptor = (flags_a & BEHAVIOR_RECEPTOR) != 0u;
+    bool a_enzyme = (flags_a & BEHAVIOR_ENZYME) != 0u;
+    if (a_receptor && (flags_b & BEHAVIOR_ENZYME) != 0u && dist < params.interaction_radius * 0.5f) {
+        attraction += 0.6f;
+    }
+    if (a_enzyme && (flags_b & BEHAVIOR_RECEPTOR) != 0u && dist < params.interaction_radius * 0.5f) {
+        attraction += 0.6f;
+    }
+    
+    if ((flags_a & BEHAVIOR_STRUCTURAL) != 0u && (flags_b & BEHAVIOR_STRUCTURAL) != 0u) {
+        attraction += 0.3f;
+    }
+    
+    if ((flags_a & BEHAVIOR_TOXIC) != 0u || (flags_b & BEHAVIOR_TOXIC) != 0u) {
+        attraction -= 0.2f;
+    }
+    
+    if ((flags_a & BEHAVIOR_STICKY) != 0u || (flags_b & BEHAVIOR_STICKY) != 0u) {
+        attraction += 0.2f;
+    }
+    
+    if ((flags_a & BEHAVIOR_METABOLIC) != 0u && (flags_b & BEHAVIOR_NUTRIENT) != 0u) {
+        attraction += 0.5f;
+    }
+    if ((flags_a & BEHAVIOR_CELL) != 0u && (flags_b & BEHAVIOR_NUTRIENT) != 0u) {
+        attraction += 0.4f;
+    }
+    
+    if ((flags_a & BEHAVIOR_VIRION) != 0u && (flags_b & BEHAVIOR_CELL) != 0u) {
+        attraction += 0.5f;
+    }
+    if ((flags_a & BEHAVIOR_CELL) != 0u && (flags_b & BEHAVIOR_VIRION) != 0u) {
+        attraction -= 0.3f;
+    }
+    
+    if ((flags_a & BEHAVIOR_DECOMPOSER) != 0u && type_b == TYPE_DEAD_CELL) {
+        attraction += 0.6f;
+    }
+    
+    return attraction;
+}
 
 void apply_physics(uint i) {
     const float MAX_RADIUS = params.interaction_radius * params.interaction_radius;
-
-    vec2  pos_a         = in_pos_buffer.data[i];
-    vec2  vel_a         = in_vel_buffer.data[i];
-    uint  type_a        = type_buffer.data[i];
-    uint  flags_a       = behavior_buffer.data[type_a];
-    float energy_a      = energy_in_buffer.data[i];
-    vec2  total_force   = vec2(0.0f);
+    
+    vec2 pos_a = in_pos_buffer.data[i];
+    vec2 vel_a = in_vel_buffer.data[i];
+    uint type_a = type_buffer.data[i];
+    uint flags_a = behavior_buffer.data[type_a];
+    float energy_a = energy_in_buffer.data[i];
+    vec2 total_force = vec2(0.0f);
     float local_density = 0.0f;
-
-    // Load genome
+    float energy_gain = 0.0f;
+    
     Genome genome = genome_in.data[i];
-    float age      = genome.age;
+    float age = genome.age;
     float lifespan = genome.lifespan;
     float self_mod = genome.self_mod;
     float cross_mod = genome.cross_mod;
-    uint  gen = genome.generation;
+    uint gen = genome.generation;
     float adhesion = genome.adhesion;
-    uint  my_oid = organism_id.data[i];
-
-    bool is_repel    = (flags_a & BEHAVIOR_REPEL)    != 0u;
-    bool is_polar    = (flags_a & BEHAVIOR_POLAR)    != 0u;
-    bool is_heavy    = (flags_a & BEHAVIOR_HEAVY)    != 0u;
-    bool is_viral    = (flags_a & BEHAVIOR_VIRAL)    != 0u;
-    bool is_leech    = (flags_a & BEHAVIOR_LEECH)    != 0u;
-    bool is_shield   = (flags_a & BEHAVIOR_SHIELD)   != 0u;
-    bool is_food     = (flags_a & BEHAVIOR_FOOD)     != 0u;
-    bool is_predator = (flags_a & BEHAVIOR_PREDATOR) != 0u;
-    bool is_signaler = (flags_a & BEHAVIOR_SIGNALER) != 0u;
-
-    // Age the particle
+    
+    bool is_soluble = (flags_a & BEHAVIOR_SOLUBLE) != 0u;
+    bool is_charge = (flags_a & BEHAVIOR_CHARGE) != 0u;
+    bool is_membrane = (flags_a & BEHAVIOR_MEMBRANE) != 0u;
+    bool is_receptor = (flags_a & BEHAVIOR_RECEPTOR) != 0u;
+    bool is_enzyme = (flags_a & BEHAVIOR_ENZYME) != 0u;
+    bool is_structural = (flags_a & BEHAVIOR_STRUCTURAL) != 0u;
+    bool is_signaling = (flags_a & BEHAVIOR_SIGNALING) != 0u;
+    bool is_metabolic = (flags_a & BEHAVIOR_METABOLIC) != 0u;
+    bool is_toxic = (flags_a & BEHAVIOR_TOXIC) != 0u;
+    bool is_sticky = (flags_a & BEHAVIOR_STICKY) != 0u;
+    bool is_nutrient = (flags_a & BEHAVIOR_NUTRIENT) != 0u;
+    bool is_cell = (flags_a & BEHAVIOR_CELL) != 0u;
+    bool is_decomposer = (flags_a & BEHAVIOR_DECOMPOSER) != 0u;
+    bool is_virion = (flags_a & BEHAVIOR_VIRION) != 0u;
+    
     age += params.dt;
-
-    // Age effects: older particles move slower (senescence)
+    
     float age_ratio = age / max(lifespan, 1.0f);
-    float vitality = 1.0f - age_ratio * 0.5f; // 1.0 at birth, 0.5 at death
-    vitality = max(vitality, 0.3f);
-
-    // Velocity direction for FOV
-    float speed_a = length(vel_a);
-    vec2  vel_dir_a = speed_a > 0.001f ? normalize(vel_a) : vec2(0.0f);
-
-    // Age-based radius scaling for rendering (used in render pass via energy-like signal)
-    float age_size_mod = mix(0.6f, 1.4f, 1.0f - age_ratio); // shrink with age
-
-    float angle_a        = is_polar ? angle_in_buffer.data[i] : 0.0f;
-    vec2  dipole_a       = is_polar ? vec2(cos(angle_a), sin(angle_a)) : vec2(0.0f);
-    float torque_total   = 0.0f;
-    float catalyst_boost = 0.0f;
-    float energy_gain    = 0.0f;
-
+    float vitality = 1.0f - age_ratio * 0.3f;
+    vitality = max(vitality, 0.4f);
+    
+    float mobility = 1.0f;
+    if (is_soluble) mobility = 1.3f;
+    else if (is_membrane || is_structural) mobility = 0.6f;
+    else if (is_sticky) mobility = 0.4f;
+    
     uint center_cell = get_cell_index(pos_a);
-    int cx = int(center_cell % GRID_W);
-    int cy = int(center_cell / GRID_W);
-
-    // --- density & interaction pass using GRID ---
+    int cx = int(center_cell % 128u);
+    int cy = int(center_cell / 128u);
+    
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
             int ncx = cx + dx;
             int ncy = cy + dy;
+            const uint GRID_W = 128u;
+            const uint GRID_H = 72u;
             if (ncx < 0 || ncx >= int(GRID_W) || ncy < 0 || ncy >= int(GRID_H)) continue;
             
             uint cell_idx = uint(ncx + ncy * int(GRID_W));
             uint start = grid_offsets.data[cell_idx];
-            uint end   = (cell_idx == GRID_W * GRID_H - 1u) ? params.particle_count : grid_offsets.data[cell_idx + 1u];
-
+            uint end = (cell_idx == GRID_W * GRID_H - 1u) ? params.particle_count : grid_offsets.data[cell_idx + 1u];
+            
             for (uint k = start; k < end; k++) {
                 uint j = sorted_indices.data[k];
                 if (i == j) continue;
-
-                vec2  pos_b   = in_pos_buffer.data[j];
-                vec2  delta   = pos_a - pos_b;
+                
+                vec2 pos_b = in_pos_buffer.data[j];
+                vec2 delta = pos_a - pos_b;
                 float dist_sq = dot(delta, delta);
                 if (dist_sq > MAX_RADIUS) continue;
-
+                
                 float dist = sqrt(dist_sq);
                 if (dist > 0.0f) {
-                    uint  type_b     = type_buffer.data[j];
-                    uint  flags_b    = behavior_buffer.data[type_b];
-                    float proximity  = 1.0f - dist / params.interaction_radius;
-                    vec2  normal     = normalize(delta);
+                    uint type_b = type_buffer.data[j];
+                    float proximity = 1.0f - dist / params.interaction_radius;
+                    vec2 normal = normalize(delta);
                     
-                    // Density
                     if (type_a == type_b)
                         local_density += proximity;
                     else
                         local_density += proximity * 0.5f;
-
-                    // Multicellular spring force: keep same-organism particles together
-                    if (adhesion > 0.0f && my_oid > 0u) {
-                        uint oid_b = organism_id.data[j];
-                        if (my_oid == oid_b) {
+                    
+                    if (adhesion > 0.0f) {
+                        Genome genome_b = genome_in.data[j];
+                        if (genome.adhesion > 0.0f && genome_b.adhesion > 0.0f && abs(dist - params.radius * 3.0f) < params.radius * 5.0f) {
                             float rest_length = params.radius * 3.0f;
                             float displacement = dist - rest_length;
-                            float spring_k = adhesion * 0.2f;
+                            float spring_k = adhesion * 0.15f;
                             total_force += normal * displacement * spring_k;
                         }
                     }
-
-                    // Horizontal gene transfer: nearby same-organism particles exchange genome
-                    if (adhesion > 0.01f && my_oid > 0u) {
-                        uint oid_b = organism_id.data[j];
-                        if (my_oid == oid_b && dist < params.repulsion_radius * 1.5f && random(float(i + j) * params.dt) < 0.005f) {
-                            if (dist < params.repulsion_radius * 1.5f && random(float(i + j) * params.dt) < 0.005f) {
-                                // Exchange a random trait between bonded particles
-                                Genome neighbor = genome_in.data[j];
-                                float swap_r = random(float(i + j + 97) * params.dt);
-                                if (swap_r < 0.25f) {
-                                    float tmp = genome.self_mod;
-                                    genome.self_mod = neighbor.self_mod;
-                                } else if (swap_r < 0.5f) {
-                                    float tmp = genome.cross_mod;
-                                    genome.cross_mod = neighbor.cross_mod;
-                                } else if (swap_r < 0.75f) {
-                                    float tmp = genome.adhesion;
-                                    genome.adhesion = neighbor.adhesion;
-                                } else {
-                                    float tmp = genome.defense;
-                                    genome.defense = neighbor.defense;
-                                }
-                            }
-                        }
-                    }
-
-                    // Flocking: align velocity with nearby same-type particles
-                    if ((flags_a & BEHAVIOR_FLOCKING) != 0u && type_a == type_b) {
-                        vec2 vel_b = in_vel_buffer.data[j];
-                        total_force += (vel_b - vel_a) * 0.02f * proximity;
-                    }
-
-                    float attraction = force_buffer.data[type_a + type_b * params.particle_types];
                     
-                    // Heritable trait modulation
+                    float attraction = compute_biochemical_force(type_a, type_b, dist, proximity);
+                    
                     float trait_mod = (type_a == type_b) ? self_mod : cross_mod;
-                    attraction *= max(trait_mod, 0.1f);
-
-                    // Predator sense: wider awareness
-                    if (is_predator) {
-                        vec2 to_b = normal;
-                        float facing_dot = dot(vel_dir_a, -to_b);
-                        if (facing_dot < -0.5f) continue;
+                    attraction *= max(trait_mod, 0.2f);
+                    
+                    if (is_metabolic && (behavior_buffer.data[type_b] & BEHAVIOR_NUTRIENT) != 0u) {
+                        if (dist < params.repulsion_radius * 2.0f) {
+                            float drain = 0.4f * proximity * params.dt;
+                            energy_gain += drain;
+                            atomicAdd(energy_out_buffer.data[j], -drain);
+                        }
                     }
                     
-                    // Charge logic (additive to force matrix)
-                    if (((flags_a | flags_b) & (BEHAVIOR_POSITIVE | BEHAVIOR_NEGATIVE)) != 0u) {
-                        bool pos_a = (flags_a & BEHAVIOR_POSITIVE) != 0u;
-                        bool neg_a = (flags_a & BEHAVIOR_NEGATIVE) != 0u;
-                        bool pos_b = (flags_b & BEHAVIOR_POSITIVE) != 0u;
-                        bool neg_b = (flags_b & BEHAVIOR_NEGATIVE) != 0u;
-
-                        float charge_force = 0.0f;
-                        if (pos_a && pos_b) charge_force -= 0.6f;
-                        if (neg_a && neg_b) charge_force -= 0.6f;
-                        if ((pos_a && neg_b) || (neg_a && pos_b)) charge_force += 0.6f;
-                        attraction += charge_force;
-                    }
-
-                    float force;
-
-                    // Viral infection logic
-                    if (is_viral && !((flags_b & BEHAVIOR_VIRAL) != 0u) && !((flags_b & BEHAVIOR_SHIELD) != 0u)) {
+                    if (is_virion && (behavior_buffer.data[type_b] & BEHAVIOR_CELL) != 0u) {
                         if (dist < params.repulsion_radius * 1.5f && random(float(i + j) * params.dt) < params.infection_rate * params.dt) {
-                            type_buffer.data[j] = type_a;
+                            atomicAdd(energy_out_buffer.data[i], 0.2f);
                         }
                     }
-
-                    // Predator-prey: convert nearby prey (marked as BEHAVIOR_FOOD but not actual food)
-                    if (is_predator && (flags_b & BEHAVIOR_FOOD) != 0u && type_b != 9u && (flags_b & BEHAVIOR_SHIELD) == 0u) {
-                        if (dist < params.repulsion_radius * 1.2f && energy_a > 0.5f) {
-                            float attack_chance = params.infection_rate * params.dt * 5.0f;
-                            if (random(float(i + j + 5) * params.dt) < attack_chance) {
-                                // Convert prey to predator
-                                type_buffer.data[j] = type_a;
-                                energy_a += 0.3f; // energy reward
-                            }
-                        }
+                    
+                    if (is_decomposer && type_b == TYPE_DEAD_CELL) {
+                        float converted = 0.3f * params.dt;
+                        energy_gain += converted;
+                        atomicAdd(energy_out_buffer.data[j], -2.0f);
                     }
-
-                    // Interaction-based type conversion
-                    ConversionData conv = conversion_buffer.data[type_a + type_b * params.particle_types];
-                    if (conv.target_type >= 0) {
-                        if (dist < params.repulsion_radius * 1.2f && random(float(i + j + 7) * params.dt) < conv.probability * params.dt) {
-                            type_buffer.data[i] = uint(conv.target_type);
-                        }
+                    
+                    if ((flags_a & BEHAVIOR_TOXIC) != 0u) {
+                        atomicAdd(energy_out_buffer.data[j], -0.1f * params.dt);
                     }
-
-                    // Food logic — any non-food particle can eat actual food (type 9)
-                    if (!is_food && type_b == 9u) {
-                        if (dist < params.repulsion_radius * 2.0f) {
-                            float drain = 0.5f * params.dt;
-                            energy_gain += drain;
-                            atomicAdd(energy_out_buffer.data[j], -drain);
-                        }
+                    
+                    if (attraction > 0.3f) {
+                        energy_gain += attraction * proximity * 0.03f * params.dt;
                     }
-                    // Predation — only predators drain energy from BEHAVIOR_FOOD prey (herbivores)
-                    if (is_predator && (flags_b & BEHAVIOR_FOOD) != 0u && type_b != 9u) {
-                        if (dist < params.repulsion_radius * 2.0f) {
-                            float drain = 0.3f * params.dt;
-                            energy_gain += drain;
-                            atomicAdd(energy_out_buffer.data[j], -drain);
-                        }
-                    }
-                    // Predator pursuit: steer toward nearest prey (edible non-food types)
-                    if (is_predator && (flags_b & BEHAVIOR_FOOD) != 0u && type_b != 9u && (flags_b & BEHAVIOR_SHIELD) == 0u) {
-                        float pursuit_force = 15.0f * proximity * params.dt;
-                        total_force += normal * pursuit_force;
-                    }
-                    // Energy drain (Leech)
-                    if (is_leech && !((flags_b & BEHAVIOR_SHIELD) != 0u)) {
-                        float drain = proximity * 0.1f * params.dt;
-                        energy_gain += drain;
-                    }
-
-                    // Kin recognition: share energy with same-type neighbors
-                    if (params.type_kin_share[type_a] > 0.0f && type_a == type_b && energy_a > 0.3f) {
-                        float share = params.type_kin_share[type_a] * 0.05f * params.dt;
-                        if (energy_a > share) {
-                            energy_a -= share * 0.5f;
-                            atomicAdd(energy_out_buffer.data[j], share * 0.5f);
-                        }
-                    }
-
-                    // REPEL: override force matrix — always push away
-                    if (is_repel) {
-                        attraction = -1.0f;
-                    }
-
-                    // POLAR: modulate attraction by dipole alignment; accumulate torque
-                    if (is_polar) {
-                        float align_a = dot(dipole_a, -normal);
-                        attraction *= clamp(1.0f + 1.5f * align_a, -0.5f, 2.5f);
-
-                        if ((flags_b & BEHAVIOR_POLAR) != 0u) {
-                            vec2  dipole_b = vec2(cos(angle_in_buffer.data[j]),
-                                                 sin(angle_in_buffer.data[j]));
-                            float align_b  = dot(dipole_b, normal);
-                            attraction    *= clamp(1.0f + 1.5f * align_b, -0.5f, 2.5f);
-
-                            float cross_ab = dipole_a.x * dipole_b.y - dipole_a.y * dipole_b.x;
-                            torque_total  += cross_ab * proximity * 0.02f;
-                        }
-
-                        float to_j_cross = dipole_a.x * (-normal.y) - dipole_a.y * (-normal.x);
-                        torque_total += to_j_cross * abs(attraction) * proximity * 0.04f;
-                    }
-
-                    // CATALYST neighbour
-                    if ((flags_b & BEHAVIOR_CATALYST) != 0u) {
-                        catalyst_boost += proximity;
-                    }
-
-                    // Feeding
-                    if (attraction > 0.5f) {
-                        energy_gain += attraction * proximity * 0.05f * params.dt;
-                    }
-
+                    
                     if (attraction > 0.0f) {
                         float density_factor = 1.0f - min(max(0.0f, local_density - params.density_limit), 1.005f);
                         attraction *= density_factor;
                     }
-
+                    
+                    float force;
                     if (dist < params.repulsion_radius) {
-                        force = (dist / params.repulsion_radius - 1.0f) * 2.0f;
+                        force = (dist / params.repulsion_radius - 1.0f) * 1.5f;
                     } else {
-                        float width    = params.interaction_radius - params.repulsion_radius;
+                        float width = params.interaction_radius - params.repulsion_radius;
                         float midpoint = (params.repulsion_radius + params.interaction_radius) * 0.5f;
                         force = attraction * (1.0f - abs(dist - midpoint) / (width * 0.5f));
                     }
-
-                    total_force += normal * force * -50.0f;
-
-                    // Hard-sphere collision: prevent particles from overlapping
+                    
+                    total_force += normal * force * -40.0f;
+                    
                     float base_r = max(params.type_radius[type_a], 0.5f);
                     float sphere_d = base_r * 2.0f;
                     if (dist < sphere_d) {
                         float overlap = sphere_d - dist;
-                        // Position correction (split the overlap equally)
                         pos_a += normal * overlap * 0.5f;
-                        // Velocity bounce: reflect component along collision normal
                         float vel_normal = dot(vel_a, normal);
                         if (vel_normal > 0.0f) {
                             vel_a -= 2.0f * vel_normal * normal;
@@ -471,20 +410,14 @@ void apply_physics(uint i) {
             }
         }
     }
-
-    // HEAVY: high effective mass
-    if (is_heavy) total_force *= 0.25f;
-
-    // Terrain obstacle avoidance (skip if empty terrain)
+    
     if (params.terrain_obstacle_count > 0u) {
-        // Sample terrain at particle position (map world pos to chem grid)
         float tx = (pos_a.x / params.region_size.x + 0.5f) * float(CHEM_W);
         float ty = (pos_a.y / params.region_size.y + 0.5f) * float(CHEM_H);
         uint ux = uint(clamp(floor(tx), 0.0f, float(CHEM_W - 1u)));
         uint uy = uint(clamp(floor(ty), 0.0f, float(CHEM_H - 1u)));
         float obstacle = terrain_grid.data[ux + uy * CHEM_W];
         if (obstacle > 0.1f) {
-            // Repel from obstacle: push toward nearest open direction
             vec2 repel_force = vec2(0.0f);
             for (int dy = -1; dy <= 1; dy++) {
                 for (int dx = -1; dx <= 1; dx++) {
@@ -499,422 +432,191 @@ void apply_physics(uint i) {
             }
             float rl = length(repel_force);
             if (rl > 0.0f) {
-                total_force += normalize(repel_force) * obstacle * 40.0f;
+                total_force += normalize(repel_force) * obstacle * 30.0f;
             }
         }
     }
-
-    // Chemical signal emission (signallers leave a trail)
-    if (is_signaler && !is_food) {
+    
+    float current_signal = 0.0f;
+    if (is_signaling && !is_nutrient) {
         float tx = (pos_a.x / params.region_size.x + 0.5f) * float(CHEM_W);
         float ty = (pos_a.y / params.region_size.y + 0.5f) * float(CHEM_H);
         uint ux = uint(clamp(floor(tx), 0.0f, float(CHEM_W - 1u)));
         uint uy = uint(clamp(floor(ty), 0.0f, float(CHEM_H - 1u)));
         uint cell = ux + uy * CHEM_W;
-        signal_grid.data[cell] = min(signal_grid.data[cell] + params.dt * 0.5f, 1.0f);
+        signal_grid.data[cell] = min(signal_grid.data[cell] + params.dt * 0.3f, 1.0f);
     }
-
-    // Signal gradient following (all particles are attracted to signals)
-    float current_signal = 0.0f;
-    if (!is_food && !is_predator) {
+    
+    if (!is_nutrient && !is_virion) {
         float tx = (pos_a.x / params.region_size.x + 0.5f) * float(CHEM_W);
         float ty = (pos_a.y / params.region_size.y + 0.5f) * float(CHEM_H);
         uint ux = uint(clamp(floor(tx), 0.0f, float(CHEM_W - 1u)));
         uint uy = uint(clamp(floor(ty), 0.0f, float(CHEM_H - 1u)));
         current_signal = signal_grid.data[ux + uy * CHEM_W];
-        if (current_signal > 0.1f) {
-            // Compute gradient via finite differences
+        if (current_signal > 0.05f) {
             float cx = ux + 1u < CHEM_W ? signal_grid.data[(ux + 1u) + uy * CHEM_W] : current_signal;
             float cy = uy + 1u < CHEM_H ? signal_grid.data[ux + (uy + 1u) * CHEM_W] : current_signal;
-            float gx = (cx - current_signal) * CHEM_W / params.region_size.x;
-            float gy = (cy - current_signal) * CHEM_H / params.region_size.y;
-            vec2 grad = vec2(gx, gy);
+            vec2 grad = vec2((cx - current_signal) * float(CHEM_W) / params.region_size.x,
+                           (cy - current_signal) * float(CHEM_H) / params.region_size.y);
             float gl = length(grad);
             if (gl > 0.0001f) {
-                total_force += normalize(grad) * current_signal * 10.0f; // follow gradient up
+                total_force += normalize(grad) * current_signal * 8.0f;
             }
         }
     }
-
-    // Memory map: particle remembers last signal value and seeks areas of improvement
-    vec2 mem = memory_map.data[i];
-    float mem_signal = mem.x;
-    float mem_age = mem.y;
-    mem_age += params.dt;
-    if (current_signal > mem_signal + 0.01f && mem_age > 1.0f) {
-        mem.x = current_signal;
-        mem.y = 0.0f;
-    } else if (current_signal < mem_signal * 0.5f && mem_age > 5.0f) {
-        total_force += (random2(float(i) + params.time_seconds + 100.0f) - 0.5f) * params.memory_strength;
-        mem.x = current_signal;
-        mem.y = 0.0f;
-    }
-    mem.x = mix(mem.x, current_signal, params.memory_decay * params.dt);
-    memory_map_out.data[i] = mem;
-
-    // Brownian motion (thermal jitter) based on day_night_factor and age
-    float temp_factor = params.day_night_factor * vitality;
-    vec2 thermal_noise = (random2(float(i) + params.time_seconds) - 0.5f) * (15.0f * temp_factor);
-    total_force += thermal_noise;
-
-    // Wind (global directional force)
-    vec2 wind_force = vec2(params.wind_x, params.wind_y);
-    total_force += wind_force;
-
-    const float MAX_FORCE = 100.0f;
+    
+    const float MAX_FORCE = 80.0f;
     float f_sq = dot(total_force, total_force);
-    if (f_sq > MAX_FORCE * MAX_FORCE)
+    if (f_sq > MAX_FORCE * MAX_FORCE) {
         total_force = normalize(total_force) * MAX_FORCE;
-
-    vel_a += total_force * params.dt * vitality;
-
-    // CATALYST & Fluid Viscosity Drag (age modifies drag)
+    }
+    
+    vel_a += total_force * params.dt * vitality * mobility;
+    
     float speed = length(vel_a);
-    float density_viscosity = 1.0f + local_density * 0.08f;
-    float base_damp = min(params.dampening + catalyst_boost * 0.04f, 0.99f);
-    float age_drag = mix(1.0f, 1.3f, age_ratio); // older = more drag
-    float drag = (base_damp - 0.02f * density_viscosity) - (0.005f * speed * params.dt);
-    drag = clamp(drag, 0.4f, 0.99f) / age_drag;
-    drag = clamp(drag, 0.3f, 0.99f);
-
-    if (is_food) {
+    float density_viscosity = 1.0f + local_density * 0.05f;
+    float drag = clamp(params.dampening - 0.02f * density_viscosity, 0.5f, 0.98f);
+    drag = clamp(drag, 0.4f, 0.98f);
+    
+    if (is_nutrient) {
         vel_a = vec2(0.0f);
     } else {
         vel_a *= drag;
     }
-
-    // Metabolism & Natural Decay
-    if (!is_food) {
+    
+    if (!is_nutrient) {
         float metab = params.type_metabolic_rate[type_a] > 0.0f ? params.type_metabolic_rate[type_a] : params.metabolism;
         energy_a -= metab * params.dt;
     } else {
-        energy_a -= params.metabolism * 0.2f * params.dt;
+        energy_a -= params.metabolism * 0.1f * params.dt;
     }
-
-    // Metamorphosis: change type at age threshold
-    if (!is_food && params.type_metamorph_age[type_a] > 0.0f && age >= params.type_metamorph_age[type_a]) {
-        int target = params.type_metamorph_target[type_a];
-        if (target >= 0 && target < int(params.particle_types)) {
-            type_buffer.data[i] = uint(target);
-            age = 0.0f;
-        }
-    }
-
+    
     energy_a += energy_gain;
     energy_a = clamp(energy_a, 0.0f, 2.0f);
-
-    // Lifespan check: die of old age
-    bool old_age_death = false;
-    if (!is_food && age >= lifespan && energy_a > 0.0f) {
-        old_age_death = true;
-    }
-
-    // Rebirth / Spawning / Mitosis
-    bool is_currently_food = (type_a == 9u);
-    bool rebirth = false;
-
-    if (energy_a <= 0.0f || old_age_death) {
-        if (!is_currently_food) {
-            type_buffer.data[i] = 9u;
-            energy_a = 0.8f;
-            vel_a = vec2(0.0f);
+    
+    bool should_rebirth = false;
+    if (energy_a <= 0.0f) {
+        if (!is_nutrient) {
+            type_buffer.data[i] = TYPE_DEAD_CELL;
+            energy_a = 0.3f;
         } else {
-            rebirth = true;
+            should_rebirth = true;
         }
     }
-
-    if (!rebirth && energy_a < 0.2f && !is_food) {
-        // Slow spontaneous spawning of basic type 0
-        if (random(float(i + 13) * params.dt) < params.spawn_probability * params.dt) {
-            rebirth = true;
-            type_buffer.data[i] = 0; // Spawn as basic type
-        }
+    
+    if (!is_nutrient && age >= lifespan && energy_a > 0.0f) {
+        type_buffer.data[i] = TYPE_DEAD_CELL;
     }
-
-    if (rebirth) {
-        bool spawned = false;
-        float seed = float(i) + params.time_seconds;
-
-        for (int attempt = 0; attempt < 4; ++attempt) {
-            uint parent_idx = uint(random(seed + float(attempt)) * float(params.particle_count));
-            if (parent_idx != i) {
-                float parent_energy = energy_in_buffer.data[parent_idx];
-                uint parent_type = type_buffer.data[parent_idx];
-
-                // Allow both non-food and food parents (food = natural food reproduction)
-                float min_energy = is_currently_food ? 0.6f : 1.5f;
-                if (parent_energy > min_energy) {
-                    vec2 parent_pos = in_pos_buffer.data[parent_idx];
-                    bool cross_species = false;
-                    uint parent2_idx = 0u;
-                    float parent2_energy = 0.0f;
-                    uint parent2_type = 9u;
-                    Genome parent2_genome;
-
-                    if (random(seed + 14.0f) < params.cross_repro_rate && parent_type != 9u) {
-                        // ── Cross-species reproduction: find a second parent of different type ──
-                        for (int attempt2 = 0; attempt2 < 3; ++attempt2) {
-                            uint p2 = uint(random(seed + 100.0f + float(attempt2)) * float(params.particle_count));
-                            if (p2 != i && p2 != parent_idx) {
-                                uint pt2 = type_buffer.data[p2];
-                                float pe2 = energy_in_buffer.data[p2];
-                                if (pt2 != 9u && pt2 != parent_type && pe2 > 1.5f) {
-                                    cross_species = true;
-                                    parent2_idx = p2;
-                                    parent2_type = pt2;
-                                    parent2_energy = pe2;
-                                    parent2_genome = genome_in.data[p2];
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // ── Parent(s) pay energy cost for offspring ──
-                    float cost = is_currently_food ? 0.1f : (cross_species ? 0.5f : 0.3f);
-                    atomicAdd(energy_out_buffer.data[parent_idx], -cost);
-                    if (cross_species)
-                        atomicAdd(energy_out_buffer.data[parent2_idx], -cost * 0.5f);
-
-                    // ── Offspring scatters at random distance (seed dispersal) ──
-                    float scatter = params.radius * (4.0f + random(seed + 12.0f) * 30.0f);
-                    float a = random(seed + 13.0f) * 6.28318f;
-                    pos_a = parent_pos + vec2(cos(a), sin(a)) * scatter;
-                    vel_a = in_vel_buffer.data[parent_idx] * 0.3f;
-
-                    if (parent_type == 9u) {
-                        // Food reproduction: offspring is also food
-                        type_buffer.data[i] = 9u;
-                        energy_a = 0.6f;
-                    } else {
-                        if (cross_species && random(seed + 15.0f) < 0.5f)
-                            type_buffer.data[i] = parent2_type;
-                        else
-                            type_buffer.data[i] = parent_type;
-                        energy_a = max((parent_energy + (cross_species ? parent2_energy : 0.0f)) * 0.35f, 0.25f);
-                    }
-
-                    // Heritable trait mutation (inherit from parent(s) with variation)
-                    Genome parent_genome = genome_in.data[parent_idx];
-                    float r0 = random(seed + 5.0f);
-                    float r1 = random(seed + 6.0f);
-                    float r2 = random(seed + 7.0f);
-                    float r3 = random(seed + 8.0f);
-                    float r4 = random(seed + 9.0f);
-
-                    if (cross_species) {
-                        // Blend both parents' genomes
-                        float blend_r = random(seed + 16.0f);
-                        genome.self_mod   = clamp(mix(parent_genome.self_mod,   parent2_genome.self_mod,   blend_r) + (r0 - 0.5f) * 0.35f, 0.3f, 2.0f);
-                        genome.cross_mod  = clamp(mix(parent_genome.cross_mod,  parent2_genome.cross_mod,  blend_r) + (r1 - 0.5f) * 0.35f, 0.3f, 2.0f);
-                        genome.lifespan   = clamp(mix(parent_genome.lifespan,   parent2_genome.lifespan,   blend_r) + (r2 - 0.5f) * 60.0f, 20.0f, 800.0f);
-                        genome.adhesion   = clamp(mix(parent_genome.adhesion,   parent2_genome.adhesion,   blend_r) + (r3 - 0.5f) * 0.2f,  0.0f, 2.0f);
-                        genome.division_rate = clamp(mix(parent_genome.division_rate, parent2_genome.division_rate, blend_r) + (r4 - 0.5f) * 0.2f, 0.0f, 2.0f);
-                        genome.defense    = clamp(mix(parent_genome.defense,    parent2_genome.defense,    blend_r) + (random(seed + 17.0f) - 0.5f) * 0.2f, 0.0f, 2.0f);
-                    } else {
-                        genome.self_mod    = clamp(parent_genome.self_mod    + (r0 - 0.5f) * 0.3f,  0.3f, 2.0f);
-                        genome.cross_mod   = clamp(parent_genome.cross_mod   + (r1 - 0.5f) * 0.3f,  0.3f, 2.0f);
-                        genome.lifespan    = clamp(parent_genome.lifespan    + (r2 - 0.5f) * 60.0f, 20.0f, 800.0f);
-                        genome.adhesion    = clamp(parent_genome.adhesion    + (r3 - 0.5f) * 0.2f,  0.0f, 2.0f);
-                        genome.division_rate = clamp(parent_genome.division_rate + (r4 - 0.5f) * 0.2f, 0.0f, 2.0f);
-                        genome.defense     = clamp(parent_genome.defense     + (random(seed + 17.0f) - 0.5f) * 0.2f, 0.0f, 2.0f);
-                    }
-                    genome.age = 0.0f;
-                    genome.generation = max(parent_genome.generation, (cross_species ? parent2_genome.generation : 0u)) + 1u;
-
-                    // Behavior flag mutation: small chance to gain/lose a random flag
-                    if (cross_species) {
-                        // Hybrid gets wider mutation range (up to type_flocking_enabled bits + 2)
-                        uint max_bit = max(9u, 10u);
-                        if (r3 < 0.03f) {
-                            uint flag_bit = 1u << uint(random(seed + 10.0f) * max_bit);
-                            atomicOr(behavior_buffer.data[parent_type], flag_bit);
-                        }
-                        if (r4 < 0.02f) {
-                            uint flag_bit = 1u << uint(random(seed + 11.0f) * max_bit);
-                            atomicAnd(behavior_buffer.data[parent_type], ~flag_bit);
-                        }
-                    } else {
-                        if (r3 < 0.02f) {
-                            uint flag_bit = 1u << uint(random(seed + 10.0f) * 9.0f);
-                            atomicOr(behavior_buffer.data[parent_type], flag_bit);
-                        }
-                        if (r4 < 0.01f) {
-                            uint flag_bit = 1u << uint(random(seed + 11.0f) * 9.0f);
-                            atomicAnd(behavior_buffer.data[parent_type], ~flag_bit);
-                        }
-                    }
-
-                    spawned = true;
-                    break;
-                }
+    
+    // Spontaneous generation (very rare - only for nearly dead particles)
+    if (!is_nutrient && type_a != TYPE_DEAD_CELL && type_a != TYPE_WATER) {
+        if (energy_a <= 0.0f) {
+            if (random(float(i + 13) * params.dt) < 0.001f) {
+                should_rebirth = true;
+                type_buffer.data[i] = TYPE_WATER;
+                energy_a = 0.5f;
             }
         }
-
-        if (!spawned) {
-            vec2 r = random2(seed);
-            pos_a = (r - 0.5f) * params.region_size;
-            vel_a = vec2(0.0f);
-            energy_a = is_currently_food ? 0.6f : 1.0f;
-            type_buffer.data[i] = is_currently_food ? 9u
-                : uint(random(seed + 1.23f) * float(params.particle_types));
-
-            // Fresh genome defaults for abiogenesis
-            genome.age       = 0.0f;
-            genome.lifespan  = DEFAULT_LIFESPAN + (random(seed + 3.0f) - 0.5f) * 100.0f;
-            genome.self_mod  = 0.8f + random(seed + 4.0f) * 0.4f;
-            genome.cross_mod = 0.8f + random(seed + 5.0f) * 0.4f;
-            genome.generation = 0u;
+    }
+    
+    if (is_cell && energy_a > 1.5f && random(float(i) * params.dt) < 0.001f * params.dt) {
+        should_rebirth = true;
+        energy_a -= 0.5f;
+    }
+    
+    if (should_rebirth) {
+        float seed = float(i) + params.time_seconds;
+        vec2 r = random2(seed);
+        pos_a = (r - 0.5f) * params.region_size;
+        vel_a = vec2(0.0f);
+        if (is_nutrient) {
+            energy_a = 0.5f;
+        } else {
+            energy_a = 0.8f;
         }
+        genome.age = 0.0f;
+        genome.lifespan = DEFAULT_LIFESPAN + (random(seed + 3.0f) - 0.5f) * 100.0f;
+        genome.self_mod = 0.8f + random(seed + 4.0f) * 0.4f;
+        genome.cross_mod = 0.8f + random(seed + 5.0f) * 0.4f;
+        genome.adhesion = 0.1f + random(seed + 6.0f) * 0.3f;
     } else {
         pos_a += vel_a * params.dt;
     }
-
+    
     out_pos_buffer.data[i] = pos_a;
     out_vel_buffer.data[i] = vel_a;
     atomicExchange(energy_out_buffer.data[i], energy_a);
-
-    // Age-pack into genome output (use age_size_mod in render via energy channel packed)
+    
     genome.age = age;
     genome_out.data[i] = genome;
-
-    // POLAR
-    if (is_polar) {
-        float avel = avel_in_buffer.data[i];
-        avel += torque_total * params.dt;
-        avel *= params.dampening;
-        angle_out_buffer.data[i] = mod(angle_in_buffer.data[i] + avel * params.dt, 6.28318f);
-        avel_out_buffer.data[i]  = avel;
-    } else {
-        angle_out_buffer.data[i] = angle_in_buffer.data[i];
-        avel_out_buffer.data[i]  = avel_in_buffer.data[i];
-    }
 }
 
-
 void render_particle(uint i) {
-    vec2  pos    = in_pos_buffer.data[i];
-    uint  type   = type_buffer.data[i];
-    uint  flags  = behavior_buffer.data[type];
+    vec2 pos = in_pos_buffer.data[i];
+    uint type = type_buffer.data[i];
+    uint flags = behavior_buffer.data[type];
     float energy = energy_in_buffer.data[i];
-    bool  polar  = (flags & BEHAVIOR_POLAR) != 0u;
-
-    // Age-based rendering
+    
     Genome genome = genome_in.data[i];
     float age_ratio = genome.age / max(genome.lifespan, 1.0f);
-    float age_brightness = 1.0f - age_ratio * 0.4f;
-
-    vec2  viewport_center = vec2(1280.0, 720.0);
-    float energy_scale = mix(0.4f, 1.6f, clamp(energy, 0.0f, 2.0f) * 0.5f);
-    float age_size = mix(1.4f, 0.6f, age_ratio); // young = big, old = small
+    float age_brightness = 1.0f - age_ratio * 0.3f;
+    
+    vec2 viewport_center = vec2(1280.0, 720.0);
+    float energy_scale = mix(0.5f, 1.5f, clamp(energy, 0.0f, 2.0f) * 0.5f);
     float type_r = max(params.type_radius[type], 0.5f);
-    float radius = type_r * params.camera_zoom * energy_scale * age_size;
-
-    bool is_food_particle = (type == 9u);
-    if (is_food_particle) {
-        float pulse = 0.7f + 0.3f * sin(params.time_seconds * 3.0f + float(i) * 0.1f);
-        radius *= pulse;
-    }
-
-    int   range  = int(ceil(radius));
-    float r      = float(range);
-
+    float radius = type_r * params.camera_zoom * energy_scale;
+    
+    int range = int(ceil(radius));
+    
     vec2 center = viewport_center + (pos - params.camera_origin) * params.camera_zoom;
-
-    if (center.x + r < 0.0f || center.x - r > 2560.0) return;
-    if (center.y + r < 0.0f || center.y - r > 1440.0) return;
-
-    float angle   = polar ? angle_in_buffer.data[i] : 0.0f;
-    vec2  dip_dir = polar ? vec2(cos(angle), sin(angle)) : vec2(0.0f);
-    vec2  north_pt = center + dip_dir * (radius * 0.55f);
-
-    // Iterate the bounding square centered on the particle. The previous code
-    // anchored the loop at (center - r) and then walked an extra [-range,+range]
-    // offset on top, producing a one-quadrant splat that read as a square.
+    
+    if (center.x + radius < 0.0f || center.x - radius > 2560.0f) return;
+    if (center.y + radius < 0.0f || center.y - radius > 1440.0f) return;
+    
     ivec2 base = ivec2(floor(center));
-
+    
     for (int dy = -range; dy <= range; dy++) {
         for (int dx = -range; dx <= range; dx++) {
             ivec2 pixel_pos = base + ivec2(dx, dy);
-            vec2  px_center = vec2(pixel_pos) + 0.5f;
-
+            vec2 px_center = vec2(pixel_pos) + 0.5f;
+            
             float d_circle = distance(px_center, center);
             if (d_circle > radius) continue;
-
-            // Anti-aliased disk rendering: 1-pixel falloff band keeps small
-            // circles smooth and round even at radius ~2px.
-            float aa_band = max(1.0, radius * 0.2);
-            float alpha   = 1.0 - smoothstep(radius - aa_band, radius, d_circle);
+            
+            float aa_band = max(1.0f, radius * 0.15f);
+            float alpha = 1.0f - smoothstep(radius - aa_band, radius, d_circle);
+            
             vec4 col;
-            if ((params.effect_flags & EFFECT_TRAIT_DISPLAY) != 0u) {
-                // Trait display: color by self_mod (0.3=blue, 2.0=red)
-                float t = (genome.self_mod - 0.3f) / 1.7f; // 0.3→0.0, 2.0→1.0
-                t = clamp(t, 0.0f, 1.0f);
+            if ((params.effect_flags & 16u) != 0u) {
+                float t = clamp((genome.self_mod - 0.3f) / 1.7f, 0.0f, 1.0f);
                 col = vec4(mix(vec3(0.1f, 0.3f, 1.0f), vec3(1.0f, 0.2f, 0.1f), t), 1.0f);
             } else {
                 col = color_buffer.data[type];
             }
-            col.a *= clamp(energy * 2.0f, 0.2f, 1.0f) * alpha;
-
-            if (energy < 0.3f) {
-                float gray = dot(col.rgb, vec3(0.299f, 0.587f, 0.114f));
-                col.rgb = mix(col.rgb, vec3(gray), 0.7f);
+            
+            if ((flags & BEHAVIOR_MEMBRANE) != 0u) {
+                col.rgb *= vec3(0.8f, 0.7f, 0.5f);
             }
-
-            // Charge indicators
-            if ((flags & BEHAVIOR_POSITIVE) != 0u) {
-                float d_pos = distance(px_center, center + vec2(radius * 0.4, -radius * 0.4));
-                if (d_pos < radius * 0.3) col = mix(col, vec4(1.0, 0.2, 0.2, col.a), 0.8 * alpha);
+            if ((flags & BEHAVIOR_ENZYME) != 0u) {
+                col.rgb = mix(col.rgb, vec3(0.9f, 0.9f, 0.2f), 0.5f);
             }
-            if ((flags & BEHAVIOR_NEGATIVE) != 0u) {
-                float d_neg = distance(px_center, center + vec2(-radius * 0.4, radius * 0.4));
-                if (d_neg < radius * 0.3) col = mix(col, vec4(0.2, 0.4, 1.0, col.a), 0.8 * alpha);
+            if ((flags & BEHAVIOR_NUTRIENT) != 0u) {
+                float pulse = 0.7f + 0.3f * sin(params.time_seconds * 3.0f + float(i) * 0.1f);
+                radius *= pulse;
             }
-
-            // Predator indicator: glowing red ring
-            if ((flags & BEHAVIOR_PREDATOR) != 0u) {
-                float d_ring = abs(d_circle - radius * 0.7f);
-                if (d_ring < 1.5f) {
-                    col = mix(col, vec4(1.0, 0.1, 0.1, col.a), 0.7 * alpha);
-                }
-            }
-
-            // Signaller indicator: pulsing yellow aura
-            if ((flags & BEHAVIOR_SIGNALER) != 0u) {
-                float d_aura = abs(d_circle - radius * 0.9f);
-                if (d_aura < 2.0f) {
-                    float pulse = 0.5 + 0.5 * sin(params.time_seconds * 5.0f + float(i));
-                    col = mix(col, vec4(1.0, 0.9, 0.2, col.a), pulse * 0.4 * alpha);
-                }
-            }
-
-            // Age dimming
+            
+            col.a *= clamp(energy * 1.5f, 0.1f, 1.0f) * alpha;
             col.rgb *= age_brightness;
-
-            if (polar) {
-                float d_north = distance(px_center, north_pt);
-                if (d_north < radius * 0.38f) {
-                    col = vec4(1.0f, 0.85f, 0.3f, col.a);
-                } else {
-                    vec2  to_px     = px_center - center;
-                    float len_to_px = length(to_px);
-                    float south_dot = (len_to_px > 0.0f)
-                                    ? dot(to_px / len_to_px, -dip_dir)
-                                    : 0.0f;
-                    float south_blend = max(0.0f, south_dot) * 0.45f;
-                    col = mix(col, vec4(0.3f, 0.5f, 1.0f, col.a), south_blend);
-                }
-            }
-
+            
             imageStore(out_render_texture, pixel_pos, col);
         }
     }
-
+    
     vec2 vel = in_vel_buffer.data[i];
     float speed = length(vel);
-    if (!is_food_particle && speed > 0.5f) {
+    if (speed > 0.3f) {
         vec2 vel_dir = normalize(vel);
-        float tail_len = min(speed * params.camera_zoom * 0.3f, radius * 3.0f);
+        float tail_len = min(speed * params.camera_zoom * 0.2f, radius * 2.0f);
         vec2 tail_end = center - vel_dir * tail_len;
         int steps = int(ceil(tail_len));
         for (int s = 0; s <= steps; s++) {
@@ -923,17 +625,10 @@ void render_particle(uint i) {
             ivec2 px = ivec2(floor(pt));
             if (px.x >= 0 && px.x < 2560 && px.y >= 0 && px.y < 1440) {
                 vec4 trail_col = color_buffer.data[type];
-                trail_col.a *= (1.0f - t_val) * 0.5f;
+                trail_col.a *= (1.0f - t_val) * 0.3f;
                 imageStore(out_render_texture, px, trail_col);
             }
         }
-    }
-}
-
-
-void signal_diffuse(uint i) {
-    if (i < CHEM_W * CHEM_H) {
-        signal_grid.data[i] *= 0.97f;
     }
 }
 
@@ -941,12 +636,11 @@ void main() {
     uint i = gl_GlobalInvocationID.x;
     
     switch (params.step) {
-    case 0: if (i < params.particle_count) apply_physics(i);   break;
-    case 1: if (i < params.particle_count) render_particle(i); break;
-    case 2: grid_clear(i);   break;
-    case 3: if (i < params.particle_count) grid_count(i);   break;
-    case 4: if (gl_GlobalInvocationID.x == 0) grid_prefix_sum(); break;
-    case 5: if (i < params.particle_count) grid_sort(i);    break;
-    case 6: signal_diffuse(i); break;
+        case 0: if (i < params.particle_count) apply_physics(i); break;
+        case 1: if (i < params.particle_count) render_particle(i); break;
+        case 2: grid_clear(i); break;
+        case 3: if (i < params.particle_count) grid_count(i); break;
+        case 4: if (gl_GlobalInvocationID.x == 0) grid_prefix_sum(); break;
+        case 5: if (i < params.particle_count) grid_sort(i); break;
     }
 }

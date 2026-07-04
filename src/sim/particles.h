@@ -63,11 +63,13 @@ public:
 
 private:
     std::mt19937 rng_;
-
+    
     void gen_particles(const SimConfig& cfg);
     void gen_random_force_matrix();
+    void gen_biochemical_force_matrix();
     void gen_empty_force_matrix();
     void gen_empty_conversion_matrix();
+    void gen_biochemical_colors();
 
     // uniform int in [lo, hi]
     int rand_range_i(int lo, int hi);
